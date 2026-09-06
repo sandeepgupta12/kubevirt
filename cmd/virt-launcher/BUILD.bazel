@@ -261,6 +261,7 @@ image_manifest(
     name = "version-container",
     base = select({
         "@io_bazel_rules_go//go/platform:linux_arm64": "@go_image_base_aarch64",
+        "//rpm:linux_ppc64le": "@go_image_base_ppc64le",
         "@io_bazel_rules_go//go/platform:linux_s390x": "@go_image_base_s390x",
         "//conditions:default": "@go_image_base",
     }),
@@ -274,6 +275,17 @@ image_manifest(
             ":qemu-hook-layer",
             ":qemu-kvm-modules-dir-layer",
             ":var-run-symlink-layer",
+        ],
+        "//rpm:linux_ppc64le": [
+            "//rpm:launcherbase_ppc64le",
+            ":get-version-tar",
+            ":libvirt-config",
+            ":passwd-tar",
+            ":nsswitch-tar",
+            ":qemu-hook-tar",
+            ":libvirt-hook-client-tar",
+            ":qemu-kvm-modules-dir-tar",
+            ":var-run-symlink-tar",
         ],
         "@io_bazel_rules_go//go/platform:linux_s390x": [
             ":launcherbase-layer-s390x",

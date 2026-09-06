@@ -64,6 +64,10 @@ image_manifest(
             ":sidecar-shim-rpm-layer-s390x",
             ":sidecar-shim-layer",
         ],
+        "//rpm:linux_ppc64le": [
+            "//rpm:sidecar-shim_ppc64le",
+            ":sidecar-shim-tar",
+        ],
         "@io_bazel_rules_go//go/platform:linux_arm64": [
             ":sidecar-shim-rpm-layer-aarch64",
             ":sidecar-shim-layer",
