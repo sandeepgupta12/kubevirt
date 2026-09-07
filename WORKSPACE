@@ -462,10 +462,11 @@ pull(
     repository = "distroless/base-debian12",
 )
 
-oci_pull(
+pull(
     name = "go_image_base_ppc64le",
     digest = "sha256:0e72bb83ef5a42644da031c5b11b97e1c9d74ed4322a5314a88db97fbacbc9d3",
-    image = "gcr.io/distroless/base-debian12",
+    registry = "gcr.io",
+    repository = "distroless/base-debian12",
 )
 
 # Pull fedora container-disk preconfigured with ci tooling
@@ -501,13 +502,14 @@ pull(
 
 # TODO: Build actual ppc64le version of this image
 # For now, using x86_64 version as placeholder to allow build to proceed
-oci_pull(
+pull(
     name = "alpine_with_test_tooling_ppc64le",
     digest = "sha256:8c8e8bb6cd81c75e492c678abb3e5f186d52eba2174ebabc328316250acfea58",
-    image = "quay.io/kubevirtci/alpine-with-test-tooling-container-disk",
+    registry = "quay.io",
+    repository = "kubevirtci/alpine-with-test-tooling-container-disk",
 )
 
-oci_pull(
+pull(
     name = "fedora_with_test_tooling_aarch64",
     digest = "sha256:0b29f1b32b2f8d75e35de165a121a9cb211741978972f27ed47e4879c1122b18",
     registry = "quay.io",
@@ -521,13 +523,14 @@ pull(
     repository = "kubevirtci/fedora-with-test-tooling",
 )
 
-oci_pull(
+pull(
     name = "fedora_with_test_tooling_ppc64le",
     digest = "sha256:897af945d1c58366086d5933ae4f341a5f1413b88e6c7f2b659436adc5d0f522",
-    image = "quay.io/kubevirtci/fedora-with-test-tooling",
+    registry = "quay.io",
+    repository = "kubevirtci/fedora-with-test-tooling",
 )
 
-oci_pull(
+pull(
     name = "s390x-guestless-kernel",
     digest = "sha256:3bf6fc355fc9718c088c4c881b2d35a073ea274f6b16dc42236ef5e29db2215d",
     registry = "quay.io",
@@ -616,14 +619,6 @@ go_repository(
     version = "v0.3.0",
 )
 
-# Register custom toolchains for ppc64le architecture
-# Only regctl uses proper toolchain mechanism
-register_toolchains(
-    "//:py_toolchain",
-    # "//tools/bazeldnf:bazeldnf_toolchain",  # Commented out - using standard bazeldnf toolchain
-    "//tools/regctl:regctl_toolchain",
-)
-
 go_repository(
     name = "org_golang_x_mod",
     build_file_generation = "on",
@@ -640,6 +635,14 @@ go_repository(
     importpath = "golang.org/x/xerrors",
     sum = "h1:go1bK/D/BFZV2I8cIQd1NKEZ+0owSTG1fDTci4IqFcE=",
     version = "v0.0.0-20200804184101-5ec99f83aff1",
+)
+
+# Register custom toolchains for ppc64le architecture
+# Only regctl uses proper toolchain mechanism
+register_toolchains(
+    "//:py_toolchain",
+    # "//tools/bazeldnf:bazeldnf_toolchain",  # Commented out - using standard bazeldnf toolchain
+    "//tools/regctl:regctl_toolchain",
 )
 
 rpm(
