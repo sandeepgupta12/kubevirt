@@ -20,20 +20,18 @@ layer_from_tar(
 )
 
 layer_from_tar(
+    name = "testimage-layer-ppc64le",
+    src = "//rpm:testimage_ppc64le",
+)
+
+layer_from_tar(
     name = "passwd-layer",
     src = ":passwd-tar",
 )
 
 image_manifest(
     name = "kubevirt-testing-base",
-    architecture = select({
-        "@io_bazel_rules_go//go/platform:linux_arm64": "arm64",
-        "//rpm:linux_ppc64le": "ppc64le",
-        "@io_bazel_rules_go//go/platform:linux_s390x": "s390x",
-        "//conditions:default": "amd64",
-    }),
-    os = "linux",
-    tars = select({
+    layers = select({
         "@io_bazel_rules_go//go/platform:linux_arm64": [
             ":testimage-layer-aarch64",
             ":passwd-layer",
@@ -43,8 +41,8 @@ image_manifest(
             ":passwd-layer",
         ],
         "//rpm:linux_ppc64le": [
-            "//rpm:testimage_ppc64le",
-            ":passwd-tar",
+            ":testimage-layer-ppc64le",
+            ":passwd-layer",
         ],
         "//conditions:default": [
             ":testimage-layer-x86_64",
