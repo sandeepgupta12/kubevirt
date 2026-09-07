@@ -66,7 +66,37 @@ pkg_tar(
     visibility = ["//visibility:public"],
 )
 
-oci_image(
+layer_from_tar(
+    name = "version-layer",
+    src = ":version",
+)
+
+layer_from_tar(
+    name = "entrypoint-layer",
+    src = ":entrypoint",
+)
+
+layer_from_tar(
+    name = "appliance-layer-x86_64",
+    src = ":appliance_layer_x86_64",
+)
+
+layer_from_tar(
+    name = "appliance-layer-s390x",
+    src = ":appliance_layer_s390x",
+)
+
+layer_from_tar(
+    name = "libguestfs-tools-rpm-layer-x86_64",
+    src = "//rpm:libguestfs-tools_x86_64",
+)
+
+layer_from_tar(
+    name = "libguestfs-tools-rpm-layer-s390x",
+    src = "//rpm:libguestfs-tools_s390x",
+)
+
+image_manifest(
     name = "version-container",
     base = "//:passwd-image",
     layers = [
