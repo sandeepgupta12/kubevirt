@@ -637,13 +637,7 @@ go_repository(
     version = "v0.0.0-20200804184101-5ec99f83aff1",
 )
 
-# Register custom toolchains for ppc64le architecture
-# Only regctl uses proper toolchain mechanism
-register_toolchains(
-    "//:py_toolchain",
-    # "//tools/bazeldnf:bazeldnf_toolchain",  # Commented out - using standard bazeldnf toolchain
-    "//tools/regctl:regctl_toolchain",
-)
+register_toolchains("//:py_toolchain")
 
 rpm(
     name = "acl-0__2.3.1-4.el9.x86_64",
