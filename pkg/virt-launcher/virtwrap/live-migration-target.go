@@ -175,11 +175,9 @@ func (l *LibvirtDomainManager) prepareMigrationTarget(
 		return fmt.Errorf("Failed to generate libvirt domain from VMI spec: %v", err)
 	}
 
-	if l.libvirtHooksServerAndClientEnabled {
-		if l.hookServer != nil {
-			if err := l.hookServer.Start(c); err != nil {
-				return err
-			}
+	if l.hookServer != nil {
+		if err := l.hookServer.Start(c, vmi); err != nil {
+			return err
 		}
 	}
 
@@ -257,7 +255,7 @@ func (l *LibvirtDomainManager) prepareMigrationTarget(
 			curDirectAddress := net.JoinHostPort(loopbackAddress, strconv.Itoa(port))
 			unixSocketPath := migrationproxy.SourceUnixFile(l.virtShareDir, key)
 			logger.V(2).Infof("Creating socketpath for unix migration/tcp %s", unixSocketPath)
-			migrationProxy := migrationproxy.NewSourceProxy(unixSocketPath, curDirectAddress, nil, nil, string(vmi.UID))
+			migrationProxy := migrationproxy.NewSourceProxy(unixSocketPath, curDirectAddress, nil, string(vmi.UID))
 
 			err := migrationProxy.Start()
 			if err != nil {

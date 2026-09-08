@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -33,7 +34,6 @@ import (
 
 	"kubevirt.io/client-go/log"
 
-	diskutils "kubevirt.io/kubevirt/pkg/ephemeral-disk-utils"
 	cmdclient "kubevirt.io/kubevirt/pkg/virt-handler/cmd-client"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 )
@@ -93,23 +93,35 @@ func (d *domainWatcher) worker(ctx context.Context, runServer runServerFunc, res
 	for {
 		select {
 		case <-resyncTicker.C:
-			d.handleResync()
+			d.handleResync(ctx)
 		case <-expiredWatchdogTicker.C:
-			d.handleStaleSocketConnections(watchdogTimeout)
+			d.handleStaleSocketConnections(ctx, watchdogTimeout)
 		case err := <-srvErr:
 			if err != nil {
 				log.Log.Reason(err).Errorf("Domain notify server exited unexpectedly")
 				d.panicOnConsecutiveFailures(err, startedAt)
-				d.result <- watch.Event{
+				d.send(ctx, watch.Event{
 					Type: watch.Error,
 					Object: &metav1.Status{
 						Status:  metav1.StatusFailure,
 						Message: fmt.Sprintf("domain notify server error: %v", err),
 					},
-				}
+				})
 			}
 			return
 		}
+	}
+}
+
+// send delivers event on d.result, but gives up once ctx is done. Without
+// this, a worker shutting down after the informer has already stopped
+// reading ResultChan() would block on this send forever, hanging Stop().
+func (d *domainWatcher) send(ctx context.Context, event watch.Event) bool {
+	select {
+	case d.result <- event:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -139,12 +151,8 @@ func (d *domainWatcher) recordNotifyServerFailureEvent(err error) {
 		"Domain notify server exited unexpectedly: %v", err)
 }
 
-func (d *domainWatcher) handleResync() {
-	socketFiles, err := listSockets(GhostRecordGlobalStore.list())
-	if err != nil {
-		log.Log.Reason(err).Error("failed to list sockets")
-		return
-	}
+func (d *domainWatcher) handleResync(ctx context.Context) {
+	socketFiles := listSockets(GhostRecordGlobalStore.list())
 
 	log.Log.Infof("resyncing virt-launcher domains")
 	for _, socket := range socketFiles {
@@ -169,18 +177,16 @@ func (d *domainWatcher) handleResync() {
 			continue
 		}
 
-		d.result <- watch.Event{Type: watch.Modified, Object: domain}
+		if !d.send(ctx, watch.Event{Type: watch.Modified, Object: domain}) {
+			return
+		}
 	}
 }
 
-func (d *domainWatcher) handleStaleSocketConnections(watchdogTimeout int) error {
+func (d *domainWatcher) handleStaleSocketConnections(ctx context.Context, watchdogTimeout int) error {
 	var unresponsive []string
 
-	socketFiles, err := listSockets(GhostRecordGlobalStore.list())
-	if err != nil {
-		log.Log.Reason(err).Error("failed to list sockets")
-		return err
-	}
+	socketFiles := listSockets(GhostRecordGlobalStore.list())
 
 	for _, socket := range socketFiles {
 		sock, err := net.DialTimeout("unix", socket, time.Duration(socketDialTimeout)*time.Second)
@@ -203,18 +209,9 @@ func (d *domainWatcher) handleStaleSocketConnections(watchdogTimeout int) error 
 	}
 
 	for key, timeStamp := range d.unresponsiveSockets {
-		found := false
-		for _, socket := range unresponsive {
-			if socket == key {
-				found = true
-				break
-			}
-		}
-		// reap old unresponsive sockets
-		// remove from unresponsive list if not found unresponsive this iteration
-		if !found {
+		if !slices.Contains(unresponsive, key) {
 			delete(d.unresponsiveSockets, key)
-			break
+			continue
 		}
 
 		diff := now - timeStamp
@@ -234,7 +231,9 @@ func (d *domainWatcher) handleStaleSocketConnections(watchdogTimeout int) error 
 				now := metav1.Now()
 				domain.ObjectMeta.DeletionTimestamp = &now
 				log.Log.Object(domain).Warningf("detected unresponsive virt-launcher command socket (%s) for domain", key)
-				d.result <- watch.Event{Type: watch.Modified, Object: domain}
+				if !d.send(ctx, watch.Event{Type: watch.Modified, Object: domain}) {
+					return ctx.Err()
+				}
 
 				err := cmdclient.MarkSocketUnresponsive(key)
 				if err != nil {
@@ -247,70 +246,6 @@ func (d *domainWatcher) handleStaleSocketConnections(watchdogTimeout int) error 
 	return nil
 }
 
-func listAllKnownDomains() ([]*api.Domain, error) {
-	var domains []*api.Domain
-
-	socketFiles, err := listSockets(GhostRecordGlobalStore.list())
-	if err != nil {
-		return nil, err
-	}
-	for _, socketFile := range socketFiles {
-
-		exists, err := diskutils.FileExists(socketFile)
-		if err != nil {
-			log.Log.Reason(err).Error("failed access cmd client socket")
-			continue
-		}
-
-		if !exists {
-			record, recordExists := GhostRecordGlobalStore.findBySocket(socketFile)
-			if recordExists {
-				domain := api.NewMinimalDomainWithNS(record.Namespace, record.Name)
-				domain.ObjectMeta.UID = record.UID
-				now := metav1.Now()
-				domain.ObjectMeta.DeletionTimestamp = &now
-				log.Log.Object(domain).Warning("detected stale domain from ghost record")
-				domains = append(domains, domain)
-			}
-			continue
-		}
-
-		log.Log.V(3).Infof("List domains from sock %s", socketFile)
-		client, err := cmdclient.NewClient(socketFile)
-		if err != nil {
-			log.Log.Reason(err).Warningf("failed to connect to cmd client socket %s, preserving domain with Unknown status", socketFile)
-			record, recordExists := GhostRecordGlobalStore.findBySocket(socketFile)
-			if recordExists {
-				domain := api.NewMinimalDomainWithNS(record.Namespace, record.Name)
-				domain.ObjectMeta.UID = record.UID
-				domain.Spec.Metadata.KubeVirt.UID = record.UID
-				domain.Status.Status = api.Unknown
-				domains = append(domains, domain)
-			}
-			continue
-		}
-		defer client.Close()
-
-		domain, exists, err := client.GetDomain()
-		if err != nil {
-			log.Log.Reason(err).Warningf("failed to list domains on cmd client socket %s, preserving domain with Unknown status", socketFile)
-			record, recordExists := GhostRecordGlobalStore.findBySocket(socketFile)
-			if recordExists {
-				domain := api.NewMinimalDomainWithNS(record.Namespace, record.Name)
-				domain.ObjectMeta.UID = record.UID
-				domain.Spec.Metadata.KubeVirt.UID = record.UID
-				domain.Status.Status = api.Unknown
-				domains = append(domains, domain)
-			}
-			continue
-		}
-		if exists {
-			domains = append(domains, domain)
-		}
-	}
-	return domains, nil
-}
-
 func (d *domainWatcher) Stop() {
 	d.cancel()
 	d.wg.Wait()
@@ -320,12 +255,12 @@ func (d *domainWatcher) ResultChan() <-chan watch.Event {
 	return d.result
 }
 
-func listSockets(ghostRecords []ghostRecord) ([]string, error) {
+func listSockets(ghostRecords []ghostRecord) []string {
 	var sockets []string
 
 	for _, record := range ghostRecords {
 		sockets = append(sockets, record.SocketFile)
 	}
 
-	return sockets, nil
+	return sockets
 }

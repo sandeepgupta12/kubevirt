@@ -27,17 +27,14 @@ const (
 	KubeletRoot                               = "/var/lib/kubelet"
 	KubeletPodsDir                            = KubeletRoot + "/pods"
 	HostRootMount                             = "/proc/1/root/"
-	ContainerBinary                           = "/container-disk-binary"
 
-	NonRootUID        = 107
-	NonRootUserString = "qemu"
-	RootUser          = 0
+	NonRootUID = 107
+	RootUser   = 0
 
 	// extensive log verbosity threshold after which libvirt debug logs will be enabled
 	EXT_LOG_VERBOSITY_THRESHOLD         = 5
 	ENV_VAR_SHARED_FILESYSTEM_PATHS     = "SHARED_FILESYSTEM_PATHS"
 	ENV_VAR_LIBVIRT_DEBUG_LOGS          = "LIBVIRT_DEBUG_LOGS"
-	ENV_VAR_VIRTIOFSD_DEBUG_LOGS        = "VIRTIOFSD_DEBUG_LOGS"
 	ENV_VAR_VIRT_LAUNCHER_LOG_VERBOSITY = "VIRT_LAUNCHER_LOG_VERBOSITY"
 )
 
@@ -51,16 +48,6 @@ func IsVMIVirtiofsEnabled(vmi *v1.VirtualMachineInstance) bool {
 		}
 	}
 	return false
-}
-
-func CountVFIODevices(vmi *v1.VirtualMachineInstance) int {
-	count := len(vmi.Spec.Domain.Devices.GPUs) + len(vmi.Spec.Domain.Devices.HostDevices)
-	for _, iface := range vmi.Spec.Domain.Devices.Interfaces {
-		if iface.SRIOV != nil {
-			count++
-		}
-	}
-	return count
 }
 
 // Check if a VMI spec requests memory overhead
@@ -197,15 +184,6 @@ func PathForSwtpm(vmi *v1.VirtualMachineInstance) string {
 	}
 
 	return swtpmPath
-}
-
-func PathForSwtpmLocalca(vmi *v1.VirtualMachineInstance) string {
-	localCaPath := "/var/lib/swtpm-localca"
-	if vmitrait.IsNonRoot(vmi) {
-		localCaPath = filepath.Join(VirtPrivateDir, "var", "lib", "swtpm-localca")
-	}
-
-	return localCaPath
 }
 
 func PathForNVram(vmi *v1.VirtualMachineInstance) string {

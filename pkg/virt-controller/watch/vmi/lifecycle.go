@@ -457,12 +457,12 @@ func (c *Controller) updateStatus(vmi *virtv1.VirtualMachineInstance, pod *k8sv1
 			}
 		}
 	case vmi.IsFinal():
-		allDeleted, err := c.allPodsDeleted(vmi)
+		podsOwnedByVMI, err := c.listPodsOwnedByVMI(vmi)
 		if err != nil {
 			return err
 		}
 
-		if allDeleted {
+		if len(podsOwnedByVMI) == 0 {
 			log.Log.V(3).Object(vmi).Infof("all pods have been deleted, removing finalizer")
 			controller.RemoveFinalizer(vmiCopy, virtv1.DeprecatedVirtualMachineInstanceFinalizer)
 			controller.RemoveFinalizer(vmiCopy, virtv1.VirtualMachineInstanceFinalizer)
@@ -615,7 +615,7 @@ func (c *Controller) updateStatus(vmi *virtv1.VirtualMachineInstance, pod *k8sv1
 func (c *Controller) addTopologyHints(vmi *virtv1.VirtualMachineInstance, vmiCopy *virtv1.VirtualMachineInstance) error {
 	if vmi.Status.TopologyHints == nil {
 		if topologyHints, tscRequirement, err := c.topologyHinter.TopologyHintsForVMI(vmi); err != nil && tscRequirement == topology.RequiredForBoot {
-			c.recorder.Eventf(vmi, k8sv1.EventTypeWarning, controller.FailedGatherhingClusterTopologyHints, err.Error())
+			c.recorder.Event(vmi, k8sv1.EventTypeWarning, controller.FailedGatherhingClusterTopologyHints, err.Error())
 			return common.NewSyncError(err, controller.FailedGatherhingClusterTopologyHints)
 		} else if topologyHints != nil {
 			vmiCopy.Status.TopologyHints = topologyHints
@@ -992,13 +992,13 @@ func checkForContainerImageError(pod *k8sv1.Pod) common.SyncError {
 }
 
 func (c *Controller) deleteAllMatchingPods(vmi *virtv1.VirtualMachineInstance) error {
-	pods, err := c.listPodsFromNamespace(vmi.Namespace)
+	pods, err := c.listPodsOwnedByVMI(vmi)
 	if err != nil {
 		return err
 	}
 	vmiKey := controller.VirtualMachineInstanceKey(vmi)
 	for _, pod := range pods {
-		if pod.DeletionTimestamp != nil && !isPodFinal(pod) || !v1.IsControlledBy(pod, vmi) {
+		if pod.DeletionTimestamp != nil && !isPodFinal(pod) {
 			continue
 		}
 		if err = c.deletePod(vmiKey, pod, v1.DeleteOptions{}); err != nil {
@@ -1027,38 +1027,34 @@ func (c *Controller) listPodsFromNamespace(namespace string) ([]*k8sv1.Pod, erro
 	return pods, nil
 }
 
-func (c *Controller) setActivePods(vmi *virtv1.VirtualMachineInstance) (*virtv1.VirtualMachineInstance, error) {
+func (c *Controller) listPodsOwnedByVMI(vmi *virtv1.VirtualMachineInstance) ([]*k8sv1.Pod, error) {
 	pods, err := c.listPodsFromNamespace(vmi.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	activePods := make(map[types.UID]string)
-	count := 0
+	var ownedPods []*k8sv1.Pod
 	for _, pod := range pods {
-		if !v1.IsControlledBy(pod, vmi) {
-			continue
+		if v1.IsControlledBy(pod, vmi) {
+			ownedPods = append(ownedPods, pod)
 		}
-		count++
-		activePods[pod.UID] = pod.Spec.NodeName
 	}
-	if count == 0 && vmi.Status.ActivePods == nil {
+	return ownedPods, nil
+}
+
+func (c *Controller) setActivePods(vmi *virtv1.VirtualMachineInstance) (*virtv1.VirtualMachineInstance, error) {
+	pods, err := c.listPodsOwnedByVMI(vmi)
+	if err != nil {
+		return nil, err
+	}
+	if len(pods) == 0 && vmi.Status.ActivePods == nil {
 		return vmi, nil
+	}
+	activePods := make(map[types.UID]string)
+	for _, pod := range pods {
+		activePods[pod.UID] = pod.Spec.NodeName
 	}
 	vmi.Status.ActivePods = activePods
 	return vmi, nil
-}
-
-func (c *Controller) allPodsDeleted(vmi *virtv1.VirtualMachineInstance) (bool, error) {
-	pods, err := c.listPodsFromNamespace(vmi.Namespace)
-	if err != nil {
-		return false, err
-	}
-	for _, pod := range pods {
-		if v1.IsControlledBy(pod, vmi) {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 func (c *Controller) deletePod(vmiKey string, pod *k8sv1.Pod, options v1.DeleteOptions) error {

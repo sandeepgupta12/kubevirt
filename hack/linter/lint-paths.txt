@@ -1,6 +1,5 @@
 cmd/cniplugins
 cmd/sidecars/network-passt-binding
-cmd/sidecars/network-slirp-binding/callback
 cmd/virt-api
 cmd/virt-controller
 cmd/virtctl
@@ -44,6 +43,8 @@ pkg/tpm
 pkg/util/ratelimiter
 pkg/virt-controller/leaderelectionconfig
 pkg/virt-controller/watch/common
+pkg/virt-controller/watch/descheduler
+pkg/virt-controller/watch/testing
 pkg/virtctl/adm
 pkg/virtctl/clientconfig
 pkg/virtctl/configuration
@@ -73,7 +74,6 @@ pkg/virt-launcher/virtwrap/converter/kvm
 pkg/virt-launcher/virtwrap/converter/metadata
 pkg/virt-launcher/virtwrap/converter/mshv
 pkg/virt-launcher/virtwrap/converter/network
-pkg/virt-launcher/virtwrap/converter/storage
 pkg/virt-launcher/virtwrap/converter/translate
 pkg/virt-launcher/virtwrap/converter/types
 pkg/virt-launcher/virtwrap/converter/virtio

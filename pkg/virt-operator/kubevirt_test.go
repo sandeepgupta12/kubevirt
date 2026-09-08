@@ -121,6 +121,11 @@ var (
 		components.NewVirtualMachineBackupTrackerCrd, components.NewPluginCrd,
 	}
 	numCRDs = len(crdFunctions) + numVirtTemplateCRDs
+
+	// installStrategyConfigMapCache caches the encoded install-strategy configmap by deployment ID.
+	// NewInstallStrategyConfigMap is expensive (gzip+base64 encoding of all manifests), and many
+	// tests call addInstallStrategy with the same config, so we reuse the result across test runs.
+	installStrategyConfigMapCache = map[string]*k8sv1.ConfigMap{}
 )
 
 type KubeVirtTestData struct {
@@ -1283,7 +1288,7 @@ func (k *KubeVirtTestData) addAllWithExclusionMap(config *util.KubeVirtDeploymen
 	all = append(all, rbac.GetAllCluster()...)
 	all = append(all, rbac.GetAllApiServer(NAMESPACE)...)
 	all = append(all, rbac.GetAllHandler(NAMESPACE)...)
-	all = append(all, rbac.GetAllController(NAMESPACE, true)...)
+	all = append(all, rbac.GetAllController(NAMESPACE)...)
 	all = append(all, rbac.GetAllExportProxy(NAMESPACE)...)
 	all = append(all, rbac.GetAllSynchronizationController(NAMESPACE)...)
 
@@ -1660,28 +1665,6 @@ func (k *KubeVirtTestData) makeHandlerReady() {
 	}
 }
 
-func (k *KubeVirtTestData) makeHandlerComplete() {
-	exists := false
-	var obj interface{}
-	// we need to wait until the daemonset exists
-	for !exists {
-		obj, exists, _ = k.controller.stores.DaemonSetCache.GetByKey(NAMESPACE + "/virt-handler")
-		if exists {
-			handler, _ := obj.(*appsv1.DaemonSet)
-			handlerNew := handler.DeepCopy()
-			maxUnavailable := intstr.FromInt(1)
-			handlerNew.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateDaemonSet{
-				MaxUnavailable: &maxUnavailable,
-			}
-			handlerNew.Spec.Template.Spec.Containers[0].Args = append(handlerNew.Spec.Template.Spec.Containers[0].Args, "migration-cn-types")
-			k.controller.stores.DaemonSetCache.Update(handlerNew)
-			key, err := kubecontroller.KeyFunc(handlerNew)
-			Expect(err).To(Not(HaveOccurred()))
-			k.mockQueue.Add(key)
-		}
-	}
-}
-
 func (k *KubeVirtTestData) addDummyValidationWebhook() {
 	version := fmt.Sprintf("rand-%s", rand.String(10))
 	registry := fmt.Sprintf("rand-%s", rand.String(10))
@@ -1708,10 +1691,16 @@ func (k *KubeVirtTestData) addValidatingWebhook(wh *admissionregistrationv1.Vali
 }
 
 func (k *KubeVirtTestData) addInstallStrategy(config *util.KubeVirtDeploymentConfig) {
-	// install strategy config
-	resource, err := install.NewInstallStrategyConfigMap(config, "openshift-monitoring", NAMESPACE)
-	Expect(err).ToNot(HaveOccurred())
+	cached, ok := installStrategyConfigMapCache[config.GetDeploymentID()]
+	if !ok {
+		var err error
+		cached, err = install.NewInstallStrategyConfigMap(config, "openshift-monitoring", NAMESPACE)
+		Expect(err).ToNot(HaveOccurred())
+		installStrategyConfigMapCache[config.GetDeploymentID()] = cached
+	}
 
+	// Each test needs a unique copy
+	resource := cached.DeepCopy()
 	resource.Name = fmt.Sprintf("%s-%s", resource.Name, rand.String(10))
 
 	injectMetadata(&resource.ObjectMeta, config)
@@ -2308,7 +2297,6 @@ var _ = Describe("KubeVirt Operator", func() {
 			kvTestData.addPodsAndPodDisruptionBudgets(kvTestData.defaultConfig, kv)
 			kvTestData.makeDeploymentsReady(kv)
 			kvTestData.makeHandlerReady()
-			kvTestData.makeHandlerComplete()
 
 			kvTestData.fakeNamespaceModificationEvent()
 			kvTestData.shouldExpectNamespacePatch()
@@ -2323,15 +2311,14 @@ var _ = Describe("KubeVirt Operator", func() {
 
 			kvTestData.controller.Execute()
 
-			// add one for the namespace
-			Expect(kvTestData.totalPatches).To(Equal(numGenerations + 1))
+			// +1 for the daemonset canary patch, +1 for the namespace labels
+			Expect(kvTestData.totalPatches).To(Equal(numGenerations + 2))
 
 			// all these resources should be tracked by there generation so everyone that has been added should now be patched
 			// since they where the `lastGeneration` was set to -1 on the KubeVirt CR
 			Expect(kvTestData.resourceChanges["mutatingwebhookconfigurations"][Patched]).To(Equal(kvTestData.resourceChanges["mutatingwebhookconfigurations"][Added]))
 			Expect(kvTestData.resourceChanges["validatingwebhookconfigurations"][Patched]).To(Equal(kvTestData.resourceChanges["validatingwebhookconfigurations"][Added]))
 			Expect(kvTestData.resourceChanges["deployments"][Patched]).To(Equal(kvTestData.resourceChanges["deployments"][Added]))
-			// Expecting to drop certificate
 			Expect(kvTestData.resourceChanges["daemonsets"][Patched]).To(Equal(kvTestData.resourceChanges["daemonsets"][Added]))
 		})
 

@@ -150,7 +150,7 @@ var CRDsValidation map[string]string = map[string]string{
             resources:
               description: |-
                 resources represents the minimum resources the volume should have.
-                If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+                Users are allowed to specify resource requirements
                 that are lower than previous value but must still be higher than capacity recorded in the
                 status field of the claim.
                 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -1409,8 +1409,12 @@ var CRDsValidation map[string]string = map[string]string{
                   type: integer
                 disableTLS:
                   description: |-
-                    When set to true, DisableTLS will disable the additional layer of live migration encryption
-                    provided by KubeVirt. This is usually a bad idea. Defaults to false
+                    DisableTLS disables both TLS encryption and mutual TLS authentication
+                    on the migration proxy when set to true. This removes all cryptographic
+                    protection from the migration data stream.
+                    When disabled, implement network-level access controls to restrict
+                    migration traffic to trusted sources only.
+                    Defaults to false.
                   type: boolean
                 matchSELinuxLevelOnMigration:
                   description: |-
@@ -2901,9 +2905,10 @@ var CRDsValidation map[string]string = map[string]string{
                       operator:
                         description: |-
                           Operator represents a key's relationship to the value.
-                          Valid operators are Exists and Equal. Defaults to Equal.
+                          Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                           Exists is equivalent to wildcard for value, so that a pod can
                           tolerate all taints of a particular category.
+                          Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                         type: string
                       tolerationSeconds:
                         description: |-
@@ -3967,9 +3972,10 @@ var CRDsValidation map[string]string = map[string]string{
                       operator:
                         description: |-
                           Operator represents a key's relationship to the value.
-                          Valid operators are Exists and Equal. Defaults to Equal.
+                          Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                           Exists is equivalent to wildcard for value, so that a pod can
                           tolerate all taints of a particular category.
+                          Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                         type: string
                       tolerationSeconds:
                         description: |-
@@ -4149,35 +4155,86 @@ var CRDsValidation map[string]string = map[string]string{
               - none
               - zstd
               type: string
+            downtimeTuning:
+              description: |-
+                DowntimeTuning configures iteration-aware downtime ramping for live
+                migration convergence.
+              properties:
+                cooldownSeconds:
+                  description: |-
+                    CooldownSeconds is the minimum interval in seconds
+                    between successive downtime increases. Defaults to 10.
+                  format: int32
+                  minimum: 1
+                  type: integer
+                initialMs:
+                  description: |-
+                    InitialMs is the initial max_downtime value in milliseconds
+                    set at the start of migration. Tuning steps increase from this value.
+                    Defaults to 150.
+                  format: int64
+                  minimum: 1
+                  type: integer
+                startAfterIteration:
+                  description: |-
+                    StartAfterIteration is the memory copy iteration after which
+                    downtime tuning begins. Defaults to 3.
+                  format: int64
+                  minimum: 1
+                  type: integer
+                steps:
+                  description: |-
+                    Steps is the number of equal increments used to ramp from
+                    InitialMs to the cluster-level MaxDowntimeMs. Defaults to 7.
+                  format: int32
+                  minimum: 1
+                  type: integer
+              type: object
             stallDetector:
               properties:
                 completionTimeoutFactor:
+                  anyOf:
+                  - type: integer
+                  - type: string
                   description: |-
                     CompletionTimeoutFactor multiplies the computed migration completion timeout to determine
                     the total time budget for deciding whether a forced switchover can still finish in time,
                     and to extend the abort deadline after initiating a completion-timeout-driven switchover.
-                    Defaults to "2".
-                  type: string
+                    Defaults to 2.
+                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                  x-kubernetes-int-or-string: true
                 ewmaAlpha:
+                  anyOf:
+                  - type: integer
+                  - type: string
                   description: |-
                     EwmaAlpha is the smoothing factor for the exponentially weighted moving average of
                     observed migration bandwidth. Must be in the range (0, 1]; zero is invalid because
                     the estimate would never incorporate new samples. Higher values weight recent samples
                     more heavily.
-                    Defaults to "0.4".
-                  type: string
+                    Defaults to 0.4.
+                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                  x-kubernetes-int-or-string: true
                 patienceWindowDecayFactor:
+                  anyOf:
+                  - type: integer
+                  - type: string
                   description: |-
                     PatienceWindowDecayFactor is the factor by which the relaxation patience window is
                     multiplied after each best-remaining-bytes relaxation step.
-                    Defaults to "0.5".
-                  type: string
+                    Defaults to 0.5.
+                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                  x-kubernetes-int-or-string: true
                 precopyPossibleFactor:
+                  anyOf:
+                  - type: integer
+                  - type: string
                   description: |-
                     PrecopyPossibleFactor is the maximum factor by which estimated downtime may exceed
                     MaxDowntime while still attempting a soft stop-and-copy instead of aborting the migration.
-                    Defaults to "1.5".
-                  type: string
+                    Defaults to 1.5.
+                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                  x-kubernetes-int-or-string: true
                 searchLocalMinima:
                   description: |-
                     SearchLocalMinima controls whether convergence actions are delayed until remaining bytes
@@ -4202,6 +4259,7 @@ var CRDsValidation map[string]string = map[string]string{
                     minimum remaining-bytes and detect when migration progress has stalled.
                     Defaults to 40.
                   format: int64
+                  minimum: 0
                   type: integer
                 switchoverTimeout:
                   description: |-
@@ -4209,6 +4267,7 @@ var CRDsValidation map[string]string = map[string]string{
                     switchover to complete after being triggered before the migration is aborted.
                     Defaults to 60.
                   format: int64
+                  minimum: 0
                   type: integer
               type: object
           type: object
@@ -4626,7 +4685,7 @@ var CRDsValidation map[string]string = map[string]string{
                       resources:
                         description: |-
                           resources represents the minimum resources the volume should have.
-                          If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+                          Users are allowed to specify resource requirements
                           that are lower than previous value but must still be higher than capacity recorded in the
                           status field of the claim.
                           More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -8152,9 +8211,10 @@ var CRDsValidation map[string]string = map[string]string{
                       operator:
                         description: |-
                           Operator represents a key's relationship to the value.
-                          Valid operators are Exists and Equal. Defaults to Equal.
+                          Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                           Exists is equivalent to wildcard for value, so that a pod can
                           tolerate all taints of a particular category.
+                          Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                         type: string
                       tolerationSeconds:
                         description: |-
@@ -14346,9 +14406,10 @@ var CRDsValidation map[string]string = map[string]string{
               operator:
                 description: |-
                   Operator represents a key's relationship to the value.
-                  Valid operators are Exists and Equal. Defaults to Equal.
+                  Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                   Exists is equivalent to wildcard for value, so that a pod can
                   tolerate all taints of a particular category.
+                  Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                 type: string
               tolerationSeconds:
                 description: |-
@@ -15274,7 +15335,8 @@ var CRDsValidation map[string]string = map[string]string{
               description: InitrdInfo show info about the initrd file
               properties:
                 checksum:
-                  description: Checksum is the checksum of the initrd file
+                  description: deprecated; Checksum is the checksum of the initrd
+                    file
                   format: int64
                   maximum: 4294967295
                   minimum: 0
@@ -15284,7 +15346,8 @@ var CRDsValidation map[string]string = map[string]string{
               description: KernelInfo show info about the kernel image
               properties:
                 checksum:
-                  description: Checksum is the checksum of the kernel image
+                  description: deprecated; Checksum is the checksum of the kernel
+                    image
                   format: int64
                   maximum: 4294967295
                   minimum: 0
@@ -15524,8 +15587,12 @@ var CRDsValidation map[string]string = map[string]string{
                   type: integer
                 disableTLS:
                   description: |-
-                    When set to true, DisableTLS will disable the additional layer of live migration encryption
-                    provided by KubeVirt. This is usually a bad idea. Defaults to false
+                    DisableTLS disables both TLS encryption and mutual TLS authentication
+                    on the migration proxy when set to true. This removes all cryptographic
+                    protection from the migration data stream.
+                    When disabled, implement network-level access controls to restrict
+                    migration traffic to trusted sources only.
+                    Defaults to false.
                   type: boolean
                 experimental:
                   description: |-
@@ -15541,35 +15608,86 @@ var CRDsValidation map[string]string = map[string]string{
                       - none
                       - zstd
                       type: string
+                    downtimeTuning:
+                      description: |-
+                        DowntimeTuning configures iteration-aware downtime ramping for live
+                        migration convergence.
+                      properties:
+                        cooldownSeconds:
+                          description: |-
+                            CooldownSeconds is the minimum interval in seconds
+                            between successive downtime increases. Defaults to 10.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        initialMs:
+                          description: |-
+                            InitialMs is the initial max_downtime value in milliseconds
+                            set at the start of migration. Tuning steps increase from this value.
+                            Defaults to 150.
+                          format: int64
+                          minimum: 1
+                          type: integer
+                        startAfterIteration:
+                          description: |-
+                            StartAfterIteration is the memory copy iteration after which
+                            downtime tuning begins. Defaults to 3.
+                          format: int64
+                          minimum: 1
+                          type: integer
+                        steps:
+                          description: |-
+                            Steps is the number of equal increments used to ramp from
+                            InitialMs to the cluster-level MaxDowntimeMs. Defaults to 7.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                      type: object
                     stallDetector:
                       properties:
                         completionTimeoutFactor:
+                          anyOf:
+                          - type: integer
+                          - type: string
                           description: |-
                             CompletionTimeoutFactor multiplies the computed migration completion timeout to determine
                             the total time budget for deciding whether a forced switchover can still finish in time,
                             and to extend the abort deadline after initiating a completion-timeout-driven switchover.
-                            Defaults to "2".
-                          type: string
+                            Defaults to 2.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
                         ewmaAlpha:
+                          anyOf:
+                          - type: integer
+                          - type: string
                           description: |-
                             EwmaAlpha is the smoothing factor for the exponentially weighted moving average of
                             observed migration bandwidth. Must be in the range (0, 1]; zero is invalid because
                             the estimate would never incorporate new samples. Higher values weight recent samples
                             more heavily.
-                            Defaults to "0.4".
-                          type: string
+                            Defaults to 0.4.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
                         patienceWindowDecayFactor:
+                          anyOf:
+                          - type: integer
+                          - type: string
                           description: |-
                             PatienceWindowDecayFactor is the factor by which the relaxation patience window is
                             multiplied after each best-remaining-bytes relaxation step.
-                            Defaults to "0.5".
-                          type: string
+                            Defaults to 0.5.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
                         precopyPossibleFactor:
+                          anyOf:
+                          - type: integer
+                          - type: string
                           description: |-
                             PrecopyPossibleFactor is the maximum factor by which estimated downtime may exceed
                             MaxDowntime while still attempting a soft stop-and-copy instead of aborting the migration.
-                            Defaults to "1.5".
-                          type: string
+                            Defaults to 1.5.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
                         searchLocalMinima:
                           description: |-
                             SearchLocalMinima controls whether convergence actions are delayed until remaining bytes
@@ -15594,6 +15712,7 @@ var CRDsValidation map[string]string = map[string]string{
                             minimum remaining-bytes and detect when migration progress has stalled.
                             Defaults to 40.
                           format: int64
+                          minimum: 0
                           type: integer
                         switchoverTimeout:
                           description: |-
@@ -15601,6 +15720,7 @@ var CRDsValidation map[string]string = map[string]string{
                             switchover to complete after being triggered before the migration is aborted.
                             Defaults to 60.
                           format: int64
+                          minimum: 0
                           type: integer
                       type: object
                   type: object
@@ -15930,8 +16050,8 @@ var CRDsValidation map[string]string = map[string]string{
                   if the volume is a containerdisk
                 properties:
                   checksum:
-                    description: Checksum is the checksum of the rootdisk or kernel
-                      artifacts inside the containerdisk
+                    description: deprecated; Checksum is the checksum of the rootdisk
+                      or kernel artifacts inside the containerdisk
                     format: int64
                     maximum: 4294967295
                     minimum: 0
@@ -16212,8 +16332,12 @@ var CRDsValidation map[string]string = map[string]string{
                   type: integer
                 disableTLS:
                   description: |-
-                    When set to true, DisableTLS will disable the additional layer of live migration encryption
-                    provided by KubeVirt. This is usually a bad idea. Defaults to false
+                    DisableTLS disables both TLS encryption and mutual TLS authentication
+                    on the migration proxy when set to true. This removes all cryptographic
+                    protection from the migration data stream.
+                    When disabled, implement network-level access controls to restrict
+                    migration traffic to trusted sources only.
+                    Defaults to false.
                   type: boolean
                 experimental:
                   description: |-
@@ -16229,35 +16353,86 @@ var CRDsValidation map[string]string = map[string]string{
                       - none
                       - zstd
                       type: string
+                    downtimeTuning:
+                      description: |-
+                        DowntimeTuning configures iteration-aware downtime ramping for live
+                        migration convergence.
+                      properties:
+                        cooldownSeconds:
+                          description: |-
+                            CooldownSeconds is the minimum interval in seconds
+                            between successive downtime increases. Defaults to 10.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        initialMs:
+                          description: |-
+                            InitialMs is the initial max_downtime value in milliseconds
+                            set at the start of migration. Tuning steps increase from this value.
+                            Defaults to 150.
+                          format: int64
+                          minimum: 1
+                          type: integer
+                        startAfterIteration:
+                          description: |-
+                            StartAfterIteration is the memory copy iteration after which
+                            downtime tuning begins. Defaults to 3.
+                          format: int64
+                          minimum: 1
+                          type: integer
+                        steps:
+                          description: |-
+                            Steps is the number of equal increments used to ramp from
+                            InitialMs to the cluster-level MaxDowntimeMs. Defaults to 7.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                      type: object
                     stallDetector:
                       properties:
                         completionTimeoutFactor:
+                          anyOf:
+                          - type: integer
+                          - type: string
                           description: |-
                             CompletionTimeoutFactor multiplies the computed migration completion timeout to determine
                             the total time budget for deciding whether a forced switchover can still finish in time,
                             and to extend the abort deadline after initiating a completion-timeout-driven switchover.
-                            Defaults to "2".
-                          type: string
+                            Defaults to 2.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
                         ewmaAlpha:
+                          anyOf:
+                          - type: integer
+                          - type: string
                           description: |-
                             EwmaAlpha is the smoothing factor for the exponentially weighted moving average of
                             observed migration bandwidth. Must be in the range (0, 1]; zero is invalid because
                             the estimate would never incorporate new samples. Higher values weight recent samples
                             more heavily.
-                            Defaults to "0.4".
-                          type: string
+                            Defaults to 0.4.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
                         patienceWindowDecayFactor:
+                          anyOf:
+                          - type: integer
+                          - type: string
                           description: |-
                             PatienceWindowDecayFactor is the factor by which the relaxation patience window is
                             multiplied after each best-remaining-bytes relaxation step.
-                            Defaults to "0.5".
-                          type: string
+                            Defaults to 0.5.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
                         precopyPossibleFactor:
+                          anyOf:
+                          - type: integer
+                          - type: string
                           description: |-
                             PrecopyPossibleFactor is the maximum factor by which estimated downtime may exceed
                             MaxDowntime while still attempting a soft stop-and-copy instead of aborting the migration.
-                            Defaults to "1.5".
-                          type: string
+                            Defaults to 1.5.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
                         searchLocalMinima:
                           description: |-
                             SearchLocalMinima controls whether convergence actions are delayed until remaining bytes
@@ -16282,6 +16457,7 @@ var CRDsValidation map[string]string = map[string]string{
                             minimum remaining-bytes and detect when migration progress has stalled.
                             Defaults to 40.
                           format: int64
+                          minimum: 0
                           type: integer
                         switchoverTimeout:
                           description: |-
@@ -16289,6 +16465,7 @@ var CRDsValidation map[string]string = map[string]string{
                             switchover to complete after being triggered before the migration is aborted.
                             Defaults to 60.
                           format: int64
+                          minimum: 0
                           type: integer
                       type: object
                   type: object
@@ -21053,9 +21230,10 @@ var CRDsValidation map[string]string = map[string]string{
                       operator:
                         description: |-
                           Operator represents a key's relationship to the value.
-                          Valid operators are Exists and Equal. Defaults to Equal.
+                          Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                           Exists is equivalent to wildcard for value, so that a pod can
                           tolerate all taints of a particular category.
+                          Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                         type: string
                       tolerationSeconds:
                         description: |-
@@ -22663,7 +22841,7 @@ var CRDsValidation map[string]string = map[string]string{
                               resources:
                                 description: |-
                                   resources represents the minimum resources the volume should have.
-                                  If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+                                  Users are allowed to specify resource requirements
                                   that are lower than previous value but must still be higher than capacity recorded in the
                                   status field of the claim.
                                   More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -26250,9 +26428,10 @@ var CRDsValidation map[string]string = map[string]string{
                               operator:
                                 description: |-
                                   Operator represents a key's relationship to the value.
-                                  Valid operators are Exists and Equal. Defaults to Equal.
+                                  Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                                   Exists is equivalent to wildcard for value, so that a pod can
                                   tolerate all taints of a particular category.
+                                  Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                                 type: string
                               tolerationSeconds:
                                 description: |-
@@ -28312,7 +28491,7 @@ var CRDsValidation map[string]string = map[string]string{
                                   resources:
                                     description: |-
                                       resources represents the minimum resources the volume should have.
-                                      If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+                                      Users are allowed to specify resource requirements
                                       that are lower than previous value but must still be higher than capacity recorded in the
                                       status field of the claim.
                                       More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -31939,9 +32118,10 @@ var CRDsValidation map[string]string = map[string]string{
                                   operator:
                                     description: |-
                                       Operator represents a key's relationship to the value.
-                                      Valid operators are Exists and Equal. Defaults to Equal.
+                                      Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                                       Exists is equivalent to wildcard for value, so that a pod can
                                       tolerate all taints of a particular category.
+                                      Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                                     type: string
                                   tolerationSeconds:
                                     description: |-
@@ -33481,7 +33661,7 @@ var CRDsValidation map[string]string = map[string]string{
                       resources:
                         description: |-
                           resources represents the minimum resources the volume should have.
-                          If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+                          Users are allowed to specify resource requirements
                           that are lower than previous value but must still be higher than capacity recorded in the
                           status field of the claim.
                           More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources

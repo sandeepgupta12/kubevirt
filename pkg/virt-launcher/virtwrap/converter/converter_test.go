@@ -249,203 +249,6 @@ var _ = Describe("Converter", func() {
 	TestSmbios := &cmdv1.SMBios{}
 	EphemeralDiskImageCreator := &fake.MockEphemeralDiskImageCreator{BaseDir: "/var/run/libvirt/kubevirt-ephemeral-disk/"}
 
-	Context("with v1.Disk", func() {
-		DescribeTable("Should define disk capacity as the minimum of capacity and request", func(arch string, requests, capacity, expected int64) {
-			context := &convertertypes.ConverterContext{Architecture: archconverter.NewConverter(arch)}
-			v1Disk := v1.Disk{
-				Name: "myvolume",
-				DiskDevice: v1.DiskDevice{
-					Disk: &v1.DiskTarget{Bus: v1.VirtIO},
-				},
-			}
-			apiDisk := api.Disk{}
-			devicePerBus := map[string]deviceNamer{}
-			numQueues := uint(2)
-			volumeStatusMap := make(map[string]v1.VolumeStatus)
-			volumeStatusMap["myvolume"] = v1.VolumeStatus{
-				PersistentVolumeClaimInfo: &v1.PersistentVolumeClaimInfo{
-					Capacity: k8sv1.ResourceList{
-						k8sv1.ResourceStorage: *resource.NewQuantity(capacity, resource.DecimalSI),
-					},
-					Requests: k8sv1.ResourceList{
-						k8sv1.ResourceStorage: *resource.NewQuantity(requests, resource.DecimalSI),
-					},
-				},
-			}
-			Convert_v1_Disk_To_api_Disk(context, &v1Disk, &apiDisk, devicePerBus, &numQueues, volumeStatusMap)
-			Expect(apiDisk.Capacity).ToNot(BeNil())
-			Expect(*apiDisk.Capacity).To(Equal(expected))
-		},
-			MultiArchEntry("Higher request than capacity", int64(9999), int64(1111), int64(1111)),
-			MultiArchEntry("Lower request than capacity", int64(1111), int64(9999), int64(1111)),
-		)
-
-		DescribeTable("Should assign scsi controller to", func(diskDevice v1.DiskDevice) {
-			context := &convertertypes.ConverterContext{}
-			v1Disk := v1.Disk{
-				Name:       "myvolume",
-				DiskDevice: diskDevice,
-			}
-			apiDisk := api.Disk{}
-			devicePerBus := map[string]deviceNamer{}
-			numQueues := uint(2)
-			volumeStatusMap := make(map[string]v1.VolumeStatus)
-			volumeStatusMap["myvolume"] = v1.VolumeStatus{}
-			Convert_v1_Disk_To_api_Disk(context, &v1Disk, &apiDisk, devicePerBus, &numQueues, volumeStatusMap)
-			Expect(apiDisk.Address).ToNot(BeNil())
-			Expect(apiDisk.Address.Bus).To(Equal("0"))
-			Expect(apiDisk.Address.Controller).To(Equal("0"))
-			Expect(apiDisk.Address.Type).To(Equal("drive"))
-			Expect(apiDisk.Address.Unit).To(Equal("0"))
-		},
-			Entry("LUN-type disk", v1.DiskDevice{
-				LUN: &v1.LunTarget{Bus: "scsi"},
-			}),
-			Entry("Disk-type disk", v1.DiskDevice{
-				Disk: &v1.DiskTarget{Bus: "scsi"},
-			}),
-		)
-
-		DescribeTable("Should add boot order when provided", func(arch, expectedModel string) {
-			order := uint(1)
-			kubevirtDisk := &v1.Disk{
-				Name:      "mydisk",
-				BootOrder: &order,
-				DiskDevice: v1.DiskDevice{
-					Disk: &v1.DiskTarget{
-						Bus: v1.VirtIO,
-					},
-				},
-			}
-			convertedDisk := fmt.Sprintf(`<Disk device="disk" type="" model="%s">
-  <source></source>
-  <target bus="virtio" dev="vda"></target>
-  <driver name="qemu" type="" discard="unmap"></driver>
-  <alias name="ua-mydisk"></alias>
-  <boot order="1"></boot>
-</Disk>`, expectedModel)
-			xml := diskToDiskXML(arch, kubevirtDisk)
-			Expect(xml).To(Equal(convertedDisk))
-		},
-			Entry("on amd64", amd64, "virtio-non-transitional"),
-			Entry("on arm64", arm64, "virtio-non-transitional"),
-			Entry("on s390x", s390x, "virtio"),
-		)
-
-		DescribeTable("should set disk I/O mode if requested", func(arch string) {
-			v1Disk := &v1.Disk{
-				IO: "native",
-			}
-			xml := diskToDiskXML(arch, v1Disk)
-			expectedXML := `<Disk device="" type="">
-  <source></source>
-  <target></target>
-  <driver io="native" name="qemu" type=""></driver>
-  <alias name="ua-"></alias>
-</Disk>`
-			Expect(xml).To(Equal(expectedXML))
-		},
-			MultiArchEntry(""),
-		)
-
-		DescribeTable("should not set disk I/O mode if not requested", func(arch string) {
-			v1Disk := &v1.Disk{}
-			xml := diskToDiskXML(arch, v1Disk)
-			expectedXML := `<Disk device="" type="">
-  <source></source>
-  <target></target>
-  <driver name="qemu" type=""></driver>
-  <alias name="ua-"></alias>
-</Disk>`
-			Expect(xml).To(Equal(expectedXML))
-		},
-			MultiArchEntry(""),
-		)
-
-		DescribeTable("Should omit boot order when not provided", func(arch, expectedModel string) {
-			kubevirtDisk := &v1.Disk{
-				Name: "mydisk",
-				DiskDevice: v1.DiskDevice{
-					Disk: &v1.DiskTarget{
-						Bus: v1.VirtIO,
-					},
-				},
-			}
-			var convertedDisk = fmt.Sprintf(`<Disk device="disk" type="" model="%s">
-  <source></source>
-  <target bus="virtio" dev="vda"></target>
-  <driver name="qemu" type="" discard="unmap"></driver>
-  <alias name="ua-mydisk"></alias>
-</Disk>`, expectedModel)
-			xml := diskToDiskXML(arch, kubevirtDisk)
-			Expect(xml).To(Equal(convertedDisk))
-		},
-			Entry("on amd64", amd64, "virtio-non-transitional"),
-			Entry("on arm64", arm64, "virtio-non-transitional"),
-			Entry("on s390x", s390x, "virtio"),
-		)
-
-		DescribeTable("Should handle custom block sizes correctly per architecture", func(arch string, logical, physical uint, shouldSucceed bool) {
-			kubevirtDisk := &v1.Disk{
-				BlockSize: &v1.BlockSize{
-					Custom: &v1.CustomBlockSize{
-						Logical:            logical,
-						Physical:           physical,
-						DiscardGranularity: pointer.P(physical),
-					},
-				},
-			}
-			libvirtDisk := &api.Disk{}
-			err := Convert_v1_BlockSize_To_api_BlockIO(kubevirtDisk, libvirtDisk, arch)
-			if shouldSucceed {
-				Expect(err).ToNot(HaveOccurred())
-				expectedXML := fmt.Sprintf(`<Disk device="" type="">
-  <source></source>
-  <target></target>
-  <blockio logical_block_size="%d" physical_block_size="%d" discard_granularity="%d"></blockio>
-</Disk>`, logical, physical, physical)
-				data, xmlErr := xml.MarshalIndent(libvirtDisk, "", "  ")
-				Expect(xmlErr).ToNot(HaveOccurred())
-				Expect(string(data)).To(Equal(expectedXML))
-			} else {
-				Expect(err).To(MatchError(ContainSubstring("exceeds the maximum supported size")))
-			}
-		},
-			MultiArchEntry("valid 1234", uint(1234), uint(1234), true),
-			Entry("4096 on s390x", s390x, uint(4096), uint(4096), true),
-			Entry("2048 on s390x", s390x, uint(2048), uint(2048), true),
-			Entry("1024 on s390x", s390x, uint(1024), uint(1024), true),
-			Entry("8192 on s390x", s390x, uint(8192), uint(8192), false),
-			Entry("65536 on s390x", s390x, uint(65536), uint(65536), false),
-			Entry("1 MiB on s390x", s390x, uint(1048576), uint(1048576), false),
-		)
-
-		DescribeTable("should set sharable and the cache if requested", func(arch, expectedModel string) {
-			v1Disk := &v1.Disk{
-				Name: "mydisk",
-				DiskDevice: v1.DiskDevice{
-					Disk: &v1.DiskTarget{
-						Bus: v1.VirtIO,
-					},
-				},
-				Shareable: pointer.P(true),
-			}
-			var expectedXML = fmt.Sprintf(`<Disk device="disk" type="" model="%s">
-  <source></source>
-  <target bus="virtio" dev="vda"></target>
-  <driver cache="none" name="qemu" type="" discard="unmap"></driver>
-  <alias name="ua-mydisk"></alias>
-  <shareable></shareable>
-</Disk>`, expectedModel)
-			xml := diskToDiskXML(arch, v1Disk)
-			Expect(xml).To(Equal(expectedXML))
-		},
-			Entry("on amd64", amd64, "virtio-non-transitional"),
-			Entry("on arm64", arm64, "virtio-non-transitional"),
-			Entry("on s390x", s390x, "virtio"),
-		)
-	})
-
 	Context("with v1.VirtualMachineInstance", func() {
 
 		var vmi *v1.VirtualMachineInstance
@@ -754,7 +557,6 @@ var _ = Describe("Converter", func() {
 		BeforeEach(func() {
 			c = &convertertypes.ConverterContext{
 				Architecture:                    archconverter.NewConverter(runtime.GOARCH),
-				VirtualMachine:                  vmi,
 				AllowEmulation:                  true,
 				HypervisorDeviceAvailable:       true,
 				IsBlockPVC:                      isBlockPVCMap,
@@ -1756,52 +1558,6 @@ var _ = Describe("Converter", func() {
 		},
 			MultiArchEntry(""),
 		)
-
-		Context("BlockIO", func() {
-			It("Should detect disk block sizes for a file DiskSource", func() {
-				v1Disk := v1.Disk{
-					Name: "test",
-					BlockSize: &v1.BlockSize{
-						MatchVolume: &v1.FeatureState{Enabled: pointer.P(true)},
-					},
-				}
-				apiDisk := api.Disk{Source: api.DiskSource{File: "/"}}
-				Expect(Convert_v1_BlockSize_To_api_BlockIO(&v1Disk, &apiDisk, amd64)).To(Succeed())
-
-				blockIO := apiDisk.BlockIO
-				Expect(blockIO.LogicalBlockSize).To(Equal(blockIO.PhysicalBlockSize))
-				// The default for most filesystems nowadays is 4096 but it can be changed.
-				// As such, relying on a specific value is flakey unless
-				// we create a disk image and filesystem just for this test.
-				// For now, as long as we have a value, the exact value doesn't matter.
-				Expect(blockIO.LogicalBlockSize).ToNot(BeZero())
-				Expect(blockIO.DiscardGranularity).ToNot(BeNil())
-				Expect(*blockIO.DiscardGranularity).To(Equal(blockIO.LogicalBlockSize))
-			})
-
-			It("Should fail for non-file or non-block devices", func() {
-				const blockIoConfigErrorMessage = "failed to configure disk with block size detection enabled"
-				v1Disk := v1.Disk{
-					Name: "test",
-					BlockSize: &v1.BlockSize{
-						MatchVolume: &v1.FeatureState{Enabled: pointer.P(true)},
-					},
-				}
-				apiDisk := api.Disk{Source: api.DiskSource{}}
-				Expect(Convert_v1_BlockSize_To_api_BlockIO(&v1Disk, &apiDisk, amd64)).To(MatchError(ContainSubstring(blockIoConfigErrorMessage)))
-			})
-
-			It("Should fail block size detection for a nil domain disk", func() {
-				const nilDiskErrorMessage = "disk is nil"
-				v1Disk := v1.Disk{
-					Name: "test",
-					BlockSize: &v1.BlockSize{
-						MatchVolume: &v1.FeatureState{Enabled: pointer.P(true)},
-					},
-				}
-				Expect(Convert_v1_BlockSize_To_api_BlockIO(&v1Disk, nil, amd64)).To(MatchError(ContainSubstring(nilDiskErrorMessage)))
-			})
-		})
 	})
 
 	Context("PCIe topology with NUMA alignment", func() {
@@ -1838,7 +1594,6 @@ var _ = Describe("Converter", func() {
 
 			c = &convertertypes.ConverterContext{
 				Architecture:   archconverter.NewConverter(runtime.GOARCH),
-				VirtualMachine: vmi,
 				AllowEmulation: true,
 				Topology: &cmdv1.Topology{
 					NumaCells: []*cmdv1.Cell{
@@ -1994,7 +1749,6 @@ var _ = Describe("Converter", func() {
 
 			c = &convertertypes.ConverterContext{
 				Architecture:   archconverter.NewConverter(runtime.GOARCH),
-				VirtualMachine: vmi,
 				AllowEmulation: true,
 				SMBios:         TestSmbios,
 				DomainAttachmentByInterfaceName: map[string]string{
@@ -2857,10 +2611,8 @@ var _ = Describe("Converter", func() {
 
 	Context("virtio block multi-queue", func() {
 		var vmi *v1.VirtualMachineInstance
-		var context *convertertypes.ConverterContext
 
 		BeforeEach(func() {
-			context = &convertertypes.ConverterContext{Architecture: archconverter.NewConverter(runtime.GOARCH), UseVirtioTransitional: false}
 			vmi = &v1.VirtualMachineInstance{
 				ObjectMeta: k8smeta.ObjectMeta{
 					Name:      "testvmi",
@@ -2896,36 +2648,6 @@ var _ = Describe("Converter", func() {
 				k8sv1.ResourceMemory: resource.MustParse("8192Ki"),
 				k8sv1.ResourceCPU:    resource.MustParse("2"),
 			}
-		})
-
-		It("should assign queues to a device if requested", func() {
-			expectedQueues := uint(2)
-
-			v1Disk := v1.Disk{
-				DiskDevice: v1.DiskDevice{
-					Disk: &v1.DiskTarget{Bus: v1.VirtIO},
-				},
-			}
-			apiDisk := api.Disk{}
-			devicePerBus := map[string]deviceNamer{}
-			numQueues := uint(2)
-			Convert_v1_Disk_To_api_Disk(context, &v1Disk, &apiDisk, devicePerBus, &numQueues, make(map[string]v1.VolumeStatus))
-			Expect(apiDisk.Device).To(Equal("disk"), "expected disk device to be defined")
-			Expect(*(apiDisk.Driver.Queues)).To(Equal(expectedQueues), "expected queues to be 2")
-		})
-
-		It("should not assign queues to a device if omitted", func() {
-			v1Disk := v1.Disk{
-				DiskDevice: v1.DiskDevice{
-					Disk: &v1.DiskTarget{},
-				},
-			}
-			apiDisk := api.Disk{}
-			devicePerBus := map[string]deviceNamer{}
-			Expect(Convert_v1_Disk_To_api_Disk(context, &v1Disk, &apiDisk, devicePerBus, nil, make(map[string]v1.VolumeStatus))).
-				To(Succeed())
-			Expect(apiDisk.Device).To(Equal("disk"), "expected disk device to be defined")
-			Expect(apiDisk.Driver.Queues).To(BeNil(), "expected no queues to be requested")
 		})
 
 		It("should assign correct number of queues with CPU hotplug topology", func() {
@@ -3138,164 +2860,6 @@ var _ = Describe("Converter", func() {
 					},
 				}),
 		)
-	})
-
-	Describe("newDeviceNamer", func() {
-		DescribeTable("should correctly build prefix map for different disk types",
-			func(volumeStatuses []v1.VolumeStatus, disks []v1.Disk, expectedPrefixes []string, expectedMappings map[string]map[string]string) {
-				prefixMap := newDeviceNamer(volumeStatuses, disks)
-
-				// Verify expected prefixes exist
-				Expect(prefixMap).To(HaveLen(len(expectedPrefixes)))
-				for _, prefix := range expectedPrefixes {
-					Expect(prefixMap).To(HaveKey(prefix))
-				}
-
-				// Verify mappings for each prefix
-				for prefix, mappings := range expectedMappings {
-					namer := prefixMap[prefix]
-					for diskName, target := range mappings {
-						Expect(namer.existingNameMap).To(HaveKeyWithValue(diskName, target))
-						Expect(namer.usedDeviceMap).To(HaveKeyWithValue(target, diskName))
-					}
-				}
-			},
-			Entry("Disk with virtio bus",
-				[]v1.VolumeStatus{{Name: "mydisk", Target: "vda"}},
-				[]v1.Disk{{Name: "mydisk", DiskDevice: v1.DiskDevice{Disk: &v1.DiskTarget{Bus: v1.DiskBusVirtio}}}},
-				[]string{"vd"},
-				map[string]map[string]string{"vd": {"mydisk": "vda"}},
-			),
-			Entry("Disk with SATA bus",
-				[]v1.VolumeStatus{{Name: "mydisk", Target: "sda"}},
-				[]v1.Disk{{Name: "mydisk", DiskDevice: v1.DiskDevice{Disk: &v1.DiskTarget{Bus: v1.DiskBusSATA}}}},
-				[]string{"sd"},
-				map[string]map[string]string{"sd": {"mydisk": "sda"}},
-			),
-			Entry("LUN with SCSI bus",
-				[]v1.VolumeStatus{{Name: "mylun", Target: "sda"}},
-				[]v1.Disk{{Name: "mylun", DiskDevice: v1.DiskDevice{LUN: &v1.LunTarget{Bus: v1.DiskBusSCSI}}}},
-				[]string{"sd"},
-				map[string]map[string]string{"sd": {"mylun": "sda"}},
-			),
-			Entry("CDRom with SATA bus",
-				[]v1.VolumeStatus{{Name: "mycdrom", Target: "sda"}},
-				[]v1.Disk{{Name: "mycdrom", DiskDevice: v1.DiskDevice{CDRom: &v1.CDRomTarget{Bus: v1.DiskBusSATA}}}},
-				[]string{"sd"},
-				map[string]map[string]string{"sd": {"mycdrom": "sda"}},
-			),
-			Entry("Mixed devices with different buses",
-				[]v1.VolumeStatus{
-					{Name: "disk1", Target: "vda"},
-					{Name: "lun1", Target: "sda"},
-					{Name: "cdrom1", Target: "sdb"},
-				},
-				[]v1.Disk{
-					{Name: "disk1", DiskDevice: v1.DiskDevice{Disk: &v1.DiskTarget{Bus: v1.DiskBusVirtio}}},
-					{Name: "lun1", DiskDevice: v1.DiskDevice{LUN: &v1.LunTarget{Bus: v1.DiskBusSCSI}}},
-					{Name: "cdrom1", DiskDevice: v1.DiskDevice{CDRom: &v1.CDRomTarget{Bus: v1.DiskBusSATA}}},
-				},
-				[]string{"vd", "sd"},
-				map[string]map[string]string{
-					"vd": {"disk1": "vda"},
-					"sd": {"lun1": "sda", "cdrom1": "sdb"},
-				},
-			),
-			Entry("Multiple disks sharing same prefix",
-				[]v1.VolumeStatus{
-					{Name: "disk1", Target: "vda"},
-					{Name: "disk2", Target: "vdb"},
-				},
-				[]v1.Disk{
-					{Name: "disk1", DiskDevice: v1.DiskDevice{Disk: &v1.DiskTarget{Bus: v1.DiskBusVirtio}}},
-					{Name: "disk2", DiskDevice: v1.DiskDevice{Disk: &v1.DiskTarget{Bus: v1.DiskBusVirtio}}},
-				},
-				[]string{"vd"},
-				map[string]map[string]string{"vd": {"disk1": "vda", "disk2": "vdb"}},
-			),
-		)
-
-		It("should return empty map for empty inputs", func() {
-			prefixMap := newDeviceNamer([]v1.VolumeStatus{}, []v1.Disk{})
-			Expect(prefixMap).To(BeEmpty())
-		})
-
-		It("should not populate maps when volume status has no target", func() {
-			volumeStatuses := []v1.VolumeStatus{{Name: "mydisk", Target: ""}}
-			disks := []v1.Disk{{Name: "mydisk", DiskDevice: v1.DiskDevice{Disk: &v1.DiskTarget{Bus: v1.DiskBusVirtio}}}}
-
-			prefixMap := newDeviceNamer(volumeStatuses, disks)
-
-			Expect(prefixMap).To(HaveKey("vd"))
-			namer := prefixMap["vd"]
-			Expect(namer.existingNameMap).To(BeEmpty())
-			Expect(namer.usedDeviceMap).To(BeEmpty())
-		})
-
-		It("should skip disks with no Disk, LUN, or CDRom defined", func() {
-			volumeStatuses := []v1.VolumeStatus{{Name: "unknown", Target: "vda"}}
-			disks := []v1.Disk{{Name: "unknown", DiskDevice: v1.DiskDevice{}}}
-
-			prefixMap := newDeviceNamer(volumeStatuses, disks)
-
-			Expect(prefixMap).To(BeEmpty())
-		})
-
-		It("should handle disk without matching volume status", func() {
-			volumeStatuses := []v1.VolumeStatus{} // no volume status
-			disks := []v1.Disk{{Name: "mydisk", DiskDevice: v1.DiskDevice{Disk: &v1.DiskTarget{Bus: v1.DiskBusVirtio}}}}
-
-			prefixMap := newDeviceNamer(volumeStatuses, disks)
-
-			Expect(prefixMap).To(HaveKey("vd"))
-			namer := prefixMap["vd"]
-			// Prefix entry exists but no mappings since there's no volume status with target
-			Expect(namer.existingNameMap).To(BeEmpty())
-			Expect(namer.usedDeviceMap).To(BeEmpty())
-		})
-
-		It("should allow new disk to fill gap after hotplug detach with mixed disk types", func() {
-			By("Simulating post-detach state: boot=sda, detached=sdb(missing), cdrom=sdc, cloudinit=sdd")
-			// This scenario: SCSI boot disk at sda, hotplugged SCSI disk was detached from sdb,
-			// SATA cdrom at sdc, SATA cloudinit at sdd. All share the 'sd' prefix.
-			volumeStatuses := []v1.VolumeStatus{
-				{Name: "boot", Target: "sda"},
-				// sdb is missing - was detached
-				{Name: "cdrom", Target: "sdc"},
-				{Name: "cloudinit", Target: "sdd"},
-			}
-			disks := []v1.Disk{
-				{Name: "boot", DiskDevice: v1.DiskDevice{Disk: &v1.DiskTarget{Bus: v1.DiskBusSCSI}}},
-				{Name: "cdrom", DiskDevice: v1.DiskDevice{CDRom: &v1.CDRomTarget{Bus: v1.DiskBusSATA}}},
-				{Name: "cloudinit", DiskDevice: v1.DiskDevice{CDRom: &v1.CDRomTarget{Bus: v1.DiskBusSATA}}},
-			}
-
-			prefixMap := newDeviceNamer(volumeStatuses, disks)
-
-			By("Verifying the prefix map correctly tracks all used targets")
-			Expect(prefixMap).To(HaveKey("sd"))
-			namer := prefixMap["sd"]
-			Expect(namer.usedDeviceMap).To(HaveKeyWithValue("sda", "boot"))
-			Expect(namer.usedDeviceMap).To(HaveKeyWithValue("sdc", "cdrom"))
-			Expect(namer.usedDeviceMap).To(HaveKeyWithValue("sdd", "cloudinit"))
-			Expect(namer.usedDeviceMap).NotTo(HaveKey("sdb")) // sdb should be available
-
-			By("Simulating domain conversion: calling makeDeviceName for each disk in order")
-			// This mirrors what Convert_v1_VirtualMachineInstance_To_api_Domain does
-			bootTarget, _ := makeDeviceName("boot", v1.DiskBusSCSI, prefixMap)
-			Expect(bootTarget).To(Equal("sda"), "boot disk should keep its existing target")
-
-			cdromTarget, _ := makeDeviceName("cdrom", v1.DiskBusSATA, prefixMap)
-			Expect(cdromTarget).To(Equal("sdc"), "cdrom should keep its existing target, not get reassigned")
-
-			cloudinitTarget, _ := makeDeviceName("cloudinit", v1.DiskBusSATA, prefixMap)
-			Expect(cloudinitTarget).To(Equal("sdd"), "cloudinit should keep its existing target, not get reassigned")
-
-			By("Adding a new hotplug SCSI disk - it should get sdb (the gap)")
-			newDiskName, index := makeDeviceName("newhotplug", v1.DiskBusSCSI, prefixMap)
-			Expect(newDiskName).To(Equal("sdb"), "new disk should fill the gap at sdb, not collide with sdc/sdd")
-			Expect(index).To(Equal(1))
-		})
 	})
 
 	Context("Correctly handle IsolateEmulatorThread with dedicated cpus", func() {
@@ -3651,7 +3215,6 @@ var _ = Describe("Converter", func() {
 
 			c = &convertertypes.ConverterContext{
 				Architecture:   archconverter.NewConverter(runtime.GOARCH),
-				VirtualMachine: vmi,
 				AllowEmulation: true,
 			}
 		})
@@ -3775,7 +3338,6 @@ var _ = Describe("Converter", func() {
 			c = &convertertypes.ConverterContext{
 				Architecture:      archconverter.NewConverter(arch),
 				BochsForEFIGuests: enableFG,
-				VirtualMachine:    vmi,
 				AllowEmulation:    true,
 				EFIConfiguration:  &convertertypes.EFIConfiguration{},
 			}
@@ -3821,7 +3383,6 @@ var _ = Describe("Converter", func() {
 
 			c = &convertertypes.ConverterContext{
 				Architecture:   archconverter.NewConverter(runtime.GOARCH),
-				VirtualMachine: vmi,
 				AllowEmulation: true,
 			}
 
@@ -3917,7 +3478,6 @@ var _ = Describe("Converter", func() {
 
 			c = &convertertypes.ConverterContext{
 				Architecture:   archconverter.NewConverter(runtime.GOARCH),
-				VirtualMachine: vmi,
 				AllowEmulation: true,
 			}
 		})
@@ -3965,9 +3525,6 @@ var _ = Describe("Converter", func() {
 		var c *convertertypes.ConverterContext
 
 		Context("disk", func() {
-
-			type ConverterFunc = func(name string, disk *api.Disk, c *convertertypes.ConverterContext) error
-
 			BeforeEach(func() {
 				vmi = &v1.VirtualMachineInstance{
 					ObjectMeta: k8smeta.ObjectMeta{
@@ -3980,7 +3537,6 @@ var _ = Describe("Converter", func() {
 
 				c = &convertertypes.ConverterContext{
 					Architecture:   archconverter.NewConverter(runtime.GOARCH),
-					VirtualMachine: vmi,
 					AllowEmulation: true,
 					IsBlockPVC: map[string]bool{
 						"test-block-pvc": true,
@@ -4018,37 +3574,6 @@ var _ = Describe("Converter", func() {
 				domain := vmiToDomain(vmi, c)
 				Expect(domain.Spec.Devices.Controllers).To(HaveLen(2))
 			})
-
-			DescribeTable("should convert",
-				func(converterFunc ConverterFunc, volumeName string, isBlockMode bool, ignoreDiscard bool) {
-					expectedDisk := &api.Disk{}
-					expectedDisk.Driver = &api.DiskDriver{}
-					expectedDisk.Driver.Type = "raw"
-					expectedDisk.Driver.ErrorPolicy = "stop"
-					if isBlockMode {
-						expectedDisk.Type = "block"
-						expectedDisk.Source.Dev = filepath.Join(v1.HotplugDiskDir, volumeName)
-					} else {
-						expectedDisk.Type = "file"
-						expectedDisk.Source.File = fmt.Sprintf("%s.img", filepath.Join(v1.HotplugDiskDir, volumeName))
-					}
-					if !ignoreDiscard {
-						expectedDisk.Driver.Discard = "unmap"
-					}
-
-					disk := &api.Disk{
-						Driver: &api.DiskDriver{},
-					}
-					Expect(converterFunc(volumeName, disk, c)).To(Succeed())
-					Expect(disk).To(Equal(expectedDisk))
-				},
-				Entry("filesystem PVC", Convert_v1_Hotplug_PersistentVolumeClaim_To_api_Disk, "test-fs-pvc", false, false),
-				Entry("block mode PVC", Convert_v1_Hotplug_PersistentVolumeClaim_To_api_Disk, "test-block-pvc", true, false),
-				Entry("'discard ignore' PVC", Convert_v1_Hotplug_PersistentVolumeClaim_To_api_Disk, "test-discard-ignore", false, true),
-				Entry("filesystem DV", Convert_v1_Hotplug_DataVolume_To_api_Disk, "test-fs-dv", false, false),
-				Entry("block mode DV", Convert_v1_Hotplug_DataVolume_To_api_Disk, "test-block-dv", true, false),
-				Entry("'discard ignore' DV", Convert_v1_Hotplug_DataVolume_To_api_Disk, "test-discard-ignore", false, true),
-			)
 
 			DescribeTable("should create domain disk with datastore for hotplug volumes with CBT enabled",
 				func(volumeName string, volSource v1.VolumeSource, isBlock bool) {
@@ -4603,77 +4128,6 @@ var _ = Describe("Converter", func() {
 	})
 })
 
-var _ = Describe("disk device naming", func() {
-	It("format device name should return correct value", func() {
-		res := FormatDeviceName("sd", 0)
-		Expect(res).To(Equal("sda"))
-		res = FormatDeviceName("sd", 1)
-		Expect(res).To(Equal("sdb"))
-		// 25 is z 26 starting at 0
-		res = FormatDeviceName("sd", 25)
-		Expect(res).To(Equal("sdz"))
-		res = FormatDeviceName("sd", 26*2-1)
-		Expect(res).To(Equal("sdaz"))
-		res = FormatDeviceName("sd", 26*26-1)
-		Expect(res).To(Equal("sdyz"))
-	})
-
-	It("makeDeviceName should generate proper name", func() {
-		prefixMap := make(map[string]deviceNamer)
-		res, index := makeDeviceName("test1", v1.VirtIO, prefixMap)
-		Expect(res).To(Equal("vda"))
-		Expect(index).To(Equal(0))
-		for i := 2; i < 10; i++ {
-			makeDeviceName(fmt.Sprintf("test%d", i), v1.VirtIO, prefixMap)
-		}
-		prefix := getPrefixFromBus(v1.VirtIO)
-		delete(prefixMap[prefix].usedDeviceMap, "vdd")
-		By("Verifying next value is vdd")
-		res, index = makeDeviceName("something", v1.VirtIO, prefixMap)
-		Expect(index).To(Equal(3))
-		Expect(res).To(Equal("vdd"))
-		res, index = makeDeviceName("something_else", v1.VirtIO, prefixMap)
-		Expect(res).To(Equal("vdj"))
-		Expect(index).To(Equal(9))
-		By("verifying existing returns correct value")
-		res, index = makeDeviceName("something", v1.VirtIO, prefixMap)
-		Expect(res).To(Equal("vdd"))
-		Expect(index).To(Equal(3))
-		By("Verifying a new bus returns from start")
-		res, index = makeDeviceName("something", "scsi", prefixMap)
-		Expect(res).To(Equal("sda"))
-		Expect(index).To(Equal(0))
-	})
-
-	It("makeDeviceName should fill target gap when mixed bus types share same prefix", func() {
-		By("Setting up prefixMap simulating: SCSI boot=sda, SATA cdrom=sdc, SATA cloudinit=sdd, sdb available")
-		prefixMap := map[string]deviceNamer{
-			"sd": {
-				existingNameMap: map[string]string{
-					"boot":      "sda",
-					"cdrom":     "sdc",
-					"cloudinit": "sdd",
-				},
-				usedDeviceMap: map[string]string{
-					"sda": "boot",
-					"sdc": "cdrom",
-					"sdd": "cloudinit",
-				},
-			},
-		}
-
-		By("Adding new SCSI disk - should get sdb (the available gap)")
-		res, index := makeDeviceName("newhotplug", v1.DiskBusSCSI, prefixMap)
-		Expect(res).To(Equal("sdb"), "new disk should fill the gap at sdb")
-		Expect(index).To(Equal(1))
-
-		By("Adding another SCSI disk - should get sde (next available after sdd)")
-		res, index = makeDeviceName("anotherhotplug", v1.DiskBusSCSI, prefixMap)
-		Expect(res).To(Equal("sde"))
-		Expect(index).To(Equal(4))
-	})
-})
-
 var _ = Describe("direct IO checker", func() {
 	var directIOChecker DirectIOChecker
 	var tmpDir string
@@ -4887,15 +4341,6 @@ var _ = Describe("Driver Cache and IO Settings", func() {
 		),
 	)
 })
-
-func diskToDiskXML(arch string, disk *v1.Disk) string {
-	devicePerBus := make(map[string]deviceNamer)
-	libvirtDisk := &api.Disk{}
-	Expect(Convert_v1_Disk_To_api_Disk(&convertertypes.ConverterContext{Architecture: archconverter.NewConverter(arch), UseVirtioTransitional: false}, disk, libvirtDisk, devicePerBus, nil, make(map[string]v1.VolumeStatus))).To(Succeed())
-	data, err := xml.MarshalIndent(libvirtDisk, "", "  ")
-	Expect(err).ToNot(HaveOccurred())
-	return string(data)
-}
 
 func vmiToDomainXML(vmi *v1.VirtualMachineInstance, c *convertertypes.ConverterContext) string {
 	domain := vmiToDomain(vmi, c)

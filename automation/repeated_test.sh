@@ -222,6 +222,8 @@ export KUBEVIRT_NFS_DIR=${KUBEVIRT_NFS_DIR:-/var/lib/containers/nfs-data}
 
 export KUBEVIRT_PROVIDER="${TEST_LANE}"
 
+detect_centos_stream_version
+
 # add_to_label_filter appends the given label and separator to
 # $label_filter which is passed to Ginkgo --filter-label flag.
 # How to use:
@@ -264,6 +266,12 @@ add_to_label_filter '(!requires-arm64)' '&&'
 add_to_label_filter '(!requires-s390x)' '&&'
 add_to_label_filter '(!requires-cross-arch-emulation)' '&&'
 add_to_label_filter '(!RequiresPersistentReservation)' '&&'
+
+if [[ ${KUBEVIRT_NUM_NODES:-} = "1" && ${KUBEVIRT_INFRA_REPLICAS:-} = "1" ]]; then
+  add_to_label_filter '!(multi-replica)' '&&'
+else
+  add_to_label_filter '!(single-replica)' '&&'
+fi
 
 if ! kubectl get clusterversion version &>/dev/null; then
   add_to_label_filter '(!OpenShift)' '&&'

@@ -409,6 +409,25 @@ var _ = Describe("Backup source", func() {
 		),
 	)
 
+	It("Should publish not ready addresses on the export service", func() {
+		testVMExport := createBackupVMExport()
+		source := NewVMBackupSource(nil, "", "")
+
+		var service *k8sv1.Service
+		k8sClient.Fake.PrependReactor("create", "services", func(action testing.Action) (handled bool, obj runtime.Object, err error) {
+			create, ok := action.(testing.CreateAction)
+			Expect(ok).To(BeTrue())
+			service, ok = create.GetObject().(*k8sv1.Service)
+			Expect(ok).To(BeTrue())
+			return true, service, nil
+		})
+
+		service, err := controller.getOrCreateExportService(testVMExport, source)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(service).ToNot(BeNil())
+		Expect(service.Spec.PublishNotReadyAddresses).To(BeTrue())
+	})
+
 	It("Should return error if VirtualMachineBackup is not found", func() {
 		testVMExport := createBackupVMExport()
 
@@ -560,7 +579,7 @@ var _ = Describe("Backup source", func() {
 		Expect(affinityTerm.PodAffinityTerm.TopologyKey).To(Equal("kubernetes.io/hostname"))
 		Expect(affinityTerm.PodAffinityTerm.LabelSelector).ToNot(BeNil())
 		Expect(affinityTerm.PodAffinityTerm.LabelSelector.MatchLabels).To(HaveKeyWithValue(virtv1.AppLabel, "virt-launcher"))
-		Expect(affinityTerm.PodAffinityTerm.LabelSelector.MatchLabels).To(HaveKeyWithValue(virtv1.DeprecatedVirtualMachineNameLabel, "test-vm"))
+		Expect(affinityTerm.PodAffinityTerm.LabelSelector.MatchLabels).To(HaveKeyWithValue(virtv1.VirtualMachineInstanceIDLabel, "test-vm"))
 	})
 
 	It("Should NOT add pod affinity when CBT is disabled (CheckpointName is nil)", func() {
@@ -611,7 +630,7 @@ var _ = Describe("Backup source", func() {
 		Expect(pod.Spec.Affinity).To(BeNil())
 	})
 
-	Context("getBackupSourceName", func() {
+	Context("getBackupSourceVMIID", func() {
 		It("Should return error when VirtualMachineBackupTracker not found", func() {
 			vmBackup := &backupv1.VirtualMachineBackup{
 				ObjectMeta: metav1.ObjectMeta{
@@ -627,13 +646,13 @@ var _ = Describe("Backup source", func() {
 				},
 			}
 
-			_, err := controller.getBackupSourceName(vmBackup)
+			_, err := controller.getBackupSourceVMIID(vmBackup)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("VirtualMachineBackupTracker not found"))
 			Expect(err.Error()).To(ContainSubstring("missing-tracker"))
 		})
 
-		It("Should return error when VMI not found", func() {
+		It("Should return the VMI ID for a direct VM source", func() {
 			vmBackup := &backupv1.VirtualMachineBackup{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-backup",
@@ -648,10 +667,9 @@ var _ = Describe("Backup source", func() {
 				},
 			}
 
-			_, err := controller.getBackupSourceName(vmBackup)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("VMI not found"))
-			Expect(err.Error()).To(ContainSubstring("test-vm"))
+			vmiID, err := controller.getBackupSourceVMIID(vmBackup)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(vmiID).To(Equal("test-vm"))
 		})
 	})
 })

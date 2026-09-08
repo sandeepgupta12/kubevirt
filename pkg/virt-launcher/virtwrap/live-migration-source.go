@@ -20,7 +20,6 @@
 package virtwrap
 
 import (
-	"encoding/xml"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -47,10 +46,8 @@ import (
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cli"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/converter/vcpu"
-	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cpudedicated"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/device/hostdevice"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/device/hostdevice/sriov"
-	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/disksource"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/stats"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/statsconv"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/util"
@@ -64,6 +61,21 @@ const (
 	monitorLogPeriodMS   = 4000
 	monitorLogInterval   = monitorLogPeriodMS / monitorSleepPeriodMS
 )
+
+const (
+	defaultInitialDowntimeMs   int64 = 150
+	defaultDowntimeSteps       int32 = 7
+	defaultStartAfterIteration int64 = 3
+	defaultCooldownSeconds     int32 = 10
+)
+
+type downtimeTuningConfig struct {
+	MaxDowntimeMs       uint64
+	InitialMs           int64
+	Steps               int32
+	StartAfterIteration int64
+	CooldownSeconds     int32
+}
 
 type migrationDisks struct {
 	shared         map[string]bool
@@ -92,6 +104,10 @@ type migrationMonitor struct {
 
 	stallDetector *stallDetector
 	logger        *log.FilteredLogger
+
+	downtimeTuning    *downtimeTuningConfig
+	currentDowntimeMs uint64
+	lastTunedAt       time.Time
 
 	// TODO: fields used by legacy stall detector; to be removed
 	lastProgressUpdate int64
@@ -168,10 +184,7 @@ func hotUnplugHostDevices(virConn cli.Connection, dom cli.VirDomain) error {
 
 // This returns domain xml without the metadata section, as it is only relevant to the source domain
 // Note: Unfortunately we can't just use UnMarshall + Marshall here, as that leads to unwanted XML alterations
-func migratableDomXML(dom cli.VirDomain, vmi *v1.VirtualMachineInstance, domSpec *api.DomainSpec, libvirtHooksEnabled bool) (string, error) {
-	var domain *api.Domain
-	var err error
-
+func migratableDomXML(dom cli.VirDomain, vmi *v1.VirtualMachineInstance) (string, error) {
 	xmlstr, err := dom.GetXMLDesc(libvirt.DOMAIN_XML_MIGRATABLE)
 	if err != nil {
 		log.Log.Object(vmi).Reason(err).Error("Live migration failed. Failed to get XML.")
@@ -181,31 +194,6 @@ func migratableDomXML(dom cli.VirDomain, vmi *v1.VirtualMachineInstance, domSpec
 	if err := domcfg.Unmarshal(xmlstr); err != nil {
 		return "", err
 	}
-	// TODO: Once LibvirtHooksServerAndClient feature gate is GA, remove
-	// convertDisks, replaced by DiskSourcePathHook on the target.
-	if !libvirtHooksEnabled {
-		if err = convertDisks(domSpec, domcfg); err != nil {
-			return "", err
-		}
-	}
-	// TODO: Once the LibvirtHooksServerAndClient feature gate is GA,
-	// this logic in the source can be removed, as XML modifications
-	// for dedicated CPUs will always be handled on the target side.
-	if !libvirtHooksEnabled && vmi.IsCPUDedicated() {
-		// If the VMI has dedicated CPUs, we need to replace the old CPUs that were
-		// assigned in the source node with the new CPUs assigned in the target node
-		err = xml.Unmarshal([]byte(xmlstr), &domain)
-		if err != nil {
-			return "", err
-		}
-		domain, err := cpudedicated.GenerateDomainForTargetCPUSetAndTopology(vmi, domSpec)
-		if err != nil {
-			return "", err
-		}
-		if err = cpudedicated.ConvertCPUDedicatedFields(domain, domcfg); err != nil {
-			return "", err
-		}
-	}
 	// set slice size for local disks to migrate
 	if err := configureLocalDiskToMigrate(domcfg, vmi); err != nil {
 		log.Log.Object(vmi).Reason(err).Error("Failed to set size for local disk.")
@@ -213,35 +201,6 @@ func migratableDomXML(dom cli.VirDomain, vmi *v1.VirtualMachineInstance, domSpec
 	}
 
 	return domcfg.Marshal()
-}
-
-func convertDisks(domSpec *api.DomainSpec, domcfg *libvirtxml.Domain) error {
-	if domcfg == nil || domcfg.Devices == nil || domSpec == nil {
-		return nil
-	}
-	if len(domSpec.Devices.Disks) != len(domcfg.Devices.Disks) {
-		return fmt.Errorf("spec and domain have different disks count")
-	}
-	for i, disk := range domSpec.Devices.Disks {
-		domcfgDisk := (&domcfg.Devices.Disks[i])
-		diskName := disk.Alias.GetName()
-
-		if disk.Source.File != "" {
-			if domcfgDisk.Source == nil || domcfgDisk.Source.File == nil {
-				return fmt.Errorf("disk %s: spec has file source but domain is missing it", diskName)
-			}
-			log.Log.Infof("Updating disk %s source file from %s to %s", diskName, domcfgDisk.Source.File.File, disk.Source.File)
-			domcfgDisk.Source.File.File = disk.Source.File
-		}
-		if disk.Source.DataStore != nil && disk.Source.DataStore.Source != nil && disk.Source.DataStore.Source.File != "" {
-			if domcfgDisk.Source == nil || domcfgDisk.Source.DataStore == nil || domcfgDisk.Source.DataStore.Source == nil || domcfgDisk.Source.DataStore.Source.File == nil {
-				return fmt.Errorf("disk %s: spec has DataStore file source but domain is missing it", diskName)
-			}
-			log.Log.Infof("Updating disk %s datastore backend from %s to %s", diskName, domcfgDisk.Source.DataStore.Source.File.File, disk.Source.DataStore.Source.File)
-			domcfgDisk.Source.DataStore.Source.File.File = disk.Source.DataStore.Source.File
-		}
-	}
-	return nil
 }
 
 func (d *migrationDisks) isSharedVolume(name string) bool {
@@ -371,7 +330,7 @@ func (l *LibvirtDomainManager) initializeMigrationMetadata(vmi *v1.VirtualMachin
 	return false, nil
 }
 
-func (l *LibvirtDomainManager) cancelMigration(vmi *v1.VirtualMachineInstance) error {
+func (l *LibvirtDomainManager) cancelMigration(vmi *v1.VirtualMachineInstance) {
 	l.metadataCache.Migration.WithSafeBlock(func(migration *api.MigrationMetadata, _ bool) {
 		if migration.EndTimestamp != nil || migration.Failed || migration.StartTimestamp == nil {
 			log.Log.Object(vmi).Infof("cancel migration ignored: vmi is not migrating")
@@ -390,7 +349,6 @@ func (l *LibvirtDomainManager) cancelMigration(vmi *v1.VirtualMachineInstance) e
 		migration.AbortStatus = string(v1.MigrationAbortInProgress)
 		l.asyncMigrationAbort(vmi)
 	})
-	return nil
 }
 
 func (l *LibvirtDomainManager) setMigrationResult(failed bool, reason string) {
@@ -407,7 +365,7 @@ func (l *LibvirtDomainManager) setMigrationResult(failed bool, reason string) {
 
 	if failed {
 		switch {
-		case strings.Contains(reason, "canceled by client"):
+		case v1.MigrationAbortStatus(migrationMetadata.AbortStatus) == v1.MigrationAbortSucceeded:
 			reason = "Live migration has been aborted"
 		case strings.Contains(standardizeSpaces(reason), "has to be smaller or equal to the actual size of the containing file"):
 			reason = fmt.Sprintf("Volume migration cannot be performed because the destination volume is smaller than the source volume: %v", reason)
@@ -464,7 +422,7 @@ func newMigrationMonitor(vmi *v1.VirtualMachineInstance, l *LibvirtDomainManager
 		}
 		monitor.logger.V(3).Infof(
 			"initialized migration monitor: stallDetection=%t progressTimeout=%ds completionTimeoutPerGiB=%d maxDowntimeMs=%d allowPostCopy=%t allowWorkloadDisruption=%t "+
-				"stallMargin=%.2f stallProgressTimeout=%ds switchoverTimeout=%ds preCopyPossibleFactor=%.2f patienceWindowDecayFactor=%.2f bandwidthEWMAAlpha=%.2f searchLocalMinima=%t completionTimeoutFactor=%.2f",
+				"stallMargin=%d%% stallProgressTimeout=%ds switchoverTimeout=%ds preCopyPossibleFactor=%g patienceWindowDecayFactor=%g bandwidthEWMAAlpha=%g searchLocalMinima=%t completionTimeoutFactor=%g",
 			stallDetectorEnabled,
 			options.ProgressTimeout,
 			options.CompletionTimeoutPerGiB,
@@ -474,11 +432,11 @@ func newMigrationMonitor(vmi *v1.VirtualMachineInstance, l *LibvirtDomainManager
 			options.StallDetectorOptions.StallMargin,
 			options.StallDetectorOptions.StallProgressTimeout,
 			options.StallDetectorOptions.SwitchoverTimeout,
-			options.StallDetectorOptions.PrecopyPossibleFactor,
-			options.StallDetectorOptions.PatienceWindowDecayFactor,
-			options.StallDetectorOptions.EwmaAlpha,
+			options.StallDetectorOptions.PrecopyPossibleFactor.AsApproximateFloat64(),
+			options.StallDetectorOptions.PatienceWindowDecayFactor.AsApproximateFloat64(),
+			options.StallDetectorOptions.EwmaAlpha.AsApproximateFloat64(),
 			options.StallDetectorOptions.SearchLocalMinima,
-			options.StallDetectorOptions.CompletionTimeoutFactor,
+			options.StallDetectorOptions.CompletionTimeoutFactor.AsApproximateFloat64(),
 		)
 		// TODO: this limitation is actively being worked on; remove when resolved. ETA: QEMU 11.1
 		if vmitrait.HasVFIO(vmi) {
@@ -486,7 +444,80 @@ func newMigrationMonitor(vmi *v1.VirtualMachineInstance, l *LibvirtDomainManager
 		}
 	}
 
+	monitor.downtimeTuning = newDowntimeTuningConfig(options.MaxDowntimeMs, options.DowntimeTuning)
+	if monitor.downtimeTuning != nil {
+		monitor.logger.Infof("downtime tuning enabled: initial=%dms steps=%d startAfterIteration=%d cooldown=%ds ceiling=%dms",
+			monitor.downtimeTuning.InitialMs, monitor.downtimeTuning.Steps,
+			monitor.downtimeTuning.StartAfterIteration, monitor.downtimeTuning.CooldownSeconds,
+			monitor.downtimeTuning.MaxDowntimeMs)
+	}
+
 	return monitor
+}
+
+func newDowntimeTuningConfig(maxDowntimeMs uint64, dt *v1.DowntimeTuningOptions) *downtimeTuningConfig {
+	if dt == nil {
+		return nil
+	}
+
+	cfg := &downtimeTuningConfig{
+		MaxDowntimeMs:       maxDowntimeMs,
+		InitialMs:           defaultInitialDowntimeMs,
+		Steps:               defaultDowntimeSteps,
+		StartAfterIteration: defaultStartAfterIteration,
+		CooldownSeconds:     defaultCooldownSeconds,
+	}
+	if dt.InitialMs != nil && *dt.InitialMs >= 0 {
+		cfg.InitialMs = *dt.InitialMs
+	}
+	if dt.Steps != nil {
+		cfg.Steps = max(*dt.Steps, 1)
+	}
+	if dt.StartAfterIteration != nil && *dt.StartAfterIteration >= 0 {
+		cfg.StartAfterIteration = *dt.StartAfterIteration
+	}
+	if dt.CooldownSeconds != nil {
+		cfg.CooldownSeconds = max(*dt.CooldownSeconds, 1)
+	}
+	if cfg.InitialMs > int64(cfg.MaxDowntimeMs) {
+		cfg.InitialMs = int64(cfg.MaxDowntimeMs)
+	}
+	return cfg
+}
+
+func (m *migrationMonitor) tuneDowntime(dom cli.VirDomain, stats *libvirt.DomainJobInfo, logger *log.FilteredLogger) {
+	cfg := m.downtimeTuning
+	if cfg == nil {
+		return
+	}
+
+	var newDowntime uint64
+	switch {
+	case m.currentDowntimeMs == 0:
+		m.currentDowntimeMs = migrationutils.QEMUDefaultTargetDowntimeMS
+		newDowntime = uint64(cfg.InitialMs)
+	case stats == nil || !stats.MemIterationSet:
+		return
+	case stats.MemIteration < uint64(cfg.StartAfterIteration):
+		return
+	case time.Since(m.lastTunedAt) < time.Duration(cfg.CooldownSeconds)*time.Second:
+		return
+	default:
+		step := max((cfg.MaxDowntimeMs-uint64(cfg.InitialMs))/uint64(cfg.Steps), 1)
+		newDowntime = min(m.currentDowntimeMs+step, cfg.MaxDowntimeMs)
+		if newDowntime <= m.currentDowntimeMs {
+			return
+		}
+	}
+
+	if err := dom.MigrateSetMaxDowntime(newDowntime, 0); err != nil {
+		logger.Reason(err).Warningf("downtime tuning: failed to set max_downtime to %dms", newDowntime)
+		return
+	}
+	logger.V(2).Infof("downtime tuning: max_downtime %dms -> %dms (ceiling=%dms)",
+		m.currentDowntimeMs, newDowntime, cfg.MaxDowntimeMs)
+	m.currentDowntimeMs = newDowntime
+	m.lastTunedAt = time.Now()
 }
 
 func (m *migrationMonitor) isMigrationPostCopy() bool {
@@ -523,8 +554,9 @@ func (m *migrationMonitor) shouldAssistMigrationToComplete(elapsedNs int64, logg
 }
 
 func (m *migrationMonitor) scaledCompletionDeadlineSeconds(baseSeconds int64) int64 {
-	m.logger.V(4).Infof("scaledCompletionDeadlineSeconds: baseSeconds=%ds, completionTimeoutFactor=%f", baseSeconds, m.options.StallDetectorOptions.CompletionTimeoutFactor)
-	return int64(float64(baseSeconds) * m.options.StallDetectorOptions.CompletionTimeoutFactor)
+	completionTimeoutFactor := m.options.StallDetectorOptions.CompletionTimeoutFactor.AsApproximateFloat64()
+	m.logger.V(4).Infof("scaledCompletionDeadlineSeconds: baseSeconds=%ds, completionTimeoutFactor=%g", baseSeconds, completionTimeoutFactor)
+	return int64(float64(baseSeconds) * completionTimeoutFactor)
 }
 
 func (m *migrationMonitor) isMigrationProgressing() bool {
@@ -588,7 +620,7 @@ func (m *migrationMonitor) processCompletionTimeouts(dom cli.VirDomain, elapsedN
 				return
 			}
 			m.acceptableCompletionTime = m.scaledCompletionDeadlineSeconds(m.acceptableCompletionTime)
-			m.switchOverDeadline = elapsedSeconds + int64(switchoverTimeout)
+			m.switchOverDeadline = elapsedSeconds + switchoverTimeout
 			sd.switchoverInitiated = true
 			return
 		}
@@ -640,7 +672,7 @@ func (m *migrationMonitor) triggerConvergenceAction(dom cli.VirDomain, action co
 		}
 
 		// since stop-and-copy is not guaranteed to start immediately (or ever), a "switch-over" deadline is needed
-		m.switchOverDeadline = elapsedSeconds + int64(switchoverTimeout)
+		m.switchOverDeadline = elapsedSeconds + switchoverTimeout
 
 	default:
 		logger.Error("unknown convergence action")
@@ -834,6 +866,7 @@ func (m *migrationMonitor) processInflightMigration(dom cli.VirDomain, stats *li
 		m.handleStallDetection(dom, stats, elapsedNs, isIterationBoundary, logger)
 	} else {
 		// TODO: to be removed once stall detection graduates
+		m.tuneDowntime(dom, stats, logger)
 		m.handleLegacyConvergence(dom, elapsedNs, logger)
 	}
 }
@@ -1037,42 +1070,13 @@ func generateDomainName(vmi *v1.VirtualMachineInstance) string {
 	return domainName
 }
 
-func updateFilePathsToNewDomain(vmi *v1.VirtualMachineInstance, domSpec *api.DomainSpec) {
-	if vmi.Status.MigrationState != nil && vmi.Status.MigrationState.TargetState != nil && vmi.Status.MigrationState.TargetState.DomainNamespace != nil {
-		targetNS := *vmi.Status.MigrationState.TargetState.DomainNamespace
-		// Modify the domain XML to update paths to the target volumes to match the new domain
-		for i, disk := range domSpec.Devices.Disks {
-			if disk.Source.DataStore != nil &&
-				disk.Source.DataStore.Source != nil &&
-				strings.Contains(disk.Source.DataStore.Source.File, vmi.Namespace) {
-				oldPath := disk.Source.DataStore.Source.File
-				domSpec.Devices.Disks[i].Source.DataStore.Source.File = strings.Replace(disk.Source.DataStore.Source.File, vmi.Namespace, targetNS, 1)
-				log.Log.Object(vmi).V(4).Infof("Updated disk %s datastore backend path from %s to %s", disk.Alias.GetName(), oldPath, domSpec.Devices.Disks[i].Source.DataStore.Source.File)
-			}
-			if disk.Source.File != "" && strings.Contains(disk.Source.File, vmi.Namespace) {
-				oldPath := disk.Source.File
-				domSpec.Devices.Disks[i].Source.File = strings.Replace(disk.Source.File, vmi.Namespace, targetNS, 1)
-				log.Log.Object(vmi).V(4).Infof("Updated disk %s source path from %s to %s", disk.Alias.GetName(), oldPath, domSpec.Devices.Disks[i].Source.File)
-			}
-			if bp := disksource.Resolve(domSpec.Devices.Disks[i]).BackendPath(); bp != "" {
-				log.Log.Object(vmi).V(4).Infof("Paths of disk %s: %s", disk.Alias.GetName(), bp)
-			}
-		}
-	}
-}
-
-func generateMigrationParams(dom cli.VirDomain, vmi *v1.VirtualMachineInstance, options *cmdclient.MigrationOptions, virtShareDir string, domSpec *api.DomainSpec, libvirtHooksEnabled bool) (*libvirt.DomainMigrateParameters, error) {
+func generateMigrationParams(dom cli.VirDomain, vmi *v1.VirtualMachineInstance, options *cmdclient.MigrationOptions, virtShareDir string) (*libvirt.DomainMigrateParameters, error) {
 	bandwidth, err := vcpu.QuantityToMebiByte(options.Bandwidth)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: Once LibvirtHooksServerAndClient feature gate is GA, remove
-	// updateFilePathsToNewDomain, replaced by DiskSourcePathHook on the target.
-	if !libvirtHooksEnabled {
-		updateFilePathsToNewDomain(vmi, domSpec)
-	}
-	xmlstr, err := migratableDomXML(dom, vmi, domSpec, libvirtHooksEnabled)
+	xmlstr, err := migratableDomXML(dom, vmi)
 	if err != nil {
 		return nil, err
 	}
@@ -1337,11 +1341,7 @@ func (l *LibvirtDomainManager) migrateHelper(vmi *v1.VirtualMachineInstance, opt
 		if err := prepareDomainForMigration(l.virConn, dom); err != nil {
 			return fmt.Errorf("error encountered during preparing domain for migration: %v", err)
 		}
-		domSpec, err := l.getDomainSpec(dom)
-		if err != nil {
-			return fmt.Errorf("failed to get domain spec: %v", err)
-		}
-		params, err = generateMigrationParams(dom, vmi, options, l.virtShareDir, domSpec, l.libvirtHooksServerAndClientEnabled)
+		params, err = generateMigrationParams(dom, vmi, options, l.virtShareDir)
 		if err != nil {
 			return fmt.Errorf("error encountered while generating migration parameters: %v", err)
 		}

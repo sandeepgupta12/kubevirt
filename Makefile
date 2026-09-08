@@ -87,8 +87,11 @@ goveralls:
 coverage-report:
 	hack/dockerized "CI=${CI} WHAT=${WHAT} ./hack/bazel-coverage-report.sh"
 
-go-test: go-build
-	SYNC_OUT=false KUBEVIRT_NO_BAZEL=true hack/dockerized "export KUBEVIRT_GO_BUILD_TAGS=${KUBEVIRT_GO_BUILD_TAGS} && ./hack/build-go.sh test ${WHAT}"
+go-test:
+	SYNC_OUT=false KUBEVIRT_NO_BAZEL=true hack/dockerized "./hack/go-test-cache.sh restore; export KUBEVIRT_GO_BUILD_TAGS=${KUBEVIRT_GO_BUILD_TAGS} && ./hack/build-go.sh test ${WHAT}"
+
+go-test-cache-save:
+	SYNC_OUT=false KUBEVIRT_NO_BAZEL=true hack/dockerized "export KUBEVIRT_GO_BUILD_TAGS=${KUBEVIRT_GO_BUILD_TAGS} && ./hack/build-go.sh test ${WHAT} && ./hack/go-test-cache.sh save"
 
 test: bazel-test
 
@@ -239,6 +242,7 @@ lint:
 	hack/dockerized "hack/golangci-lint.sh"
 	hack/dockerized "monitoringlinter ./pkg/..."
 	hack/dockerized "hack/license-header-check.sh"
+	hack/dockerized "hack/go-fix.sh --diff"
 
 lint-metrics:
 	hack/dockerized "./hack/prom-metric-linter/metrics_collector.sh > metrics.json"
@@ -247,6 +251,9 @@ lint-metrics:
 
 gofumpt:
 	./hack/dockerized "hack/gofumpt.sh"
+
+gofix:
+	./hack/dockerized "hack/go-fix.sh"
 
 update-generated-api-testdata:
 	./hack/update-generated-api-testdata.sh
@@ -266,6 +273,7 @@ vmlog-checker:
 	conformance \
 	go-build \
 	go-test \
+	go-test-cache-save \
 	go-all \
 	bazel-generate \
 	bazel-build \

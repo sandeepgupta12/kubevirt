@@ -23,8 +23,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfield "k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/utils/ptr"
 
 	v1 "kubevirt.io/api/core/v1"
 
@@ -36,9 +36,12 @@ var _ = Describe("Validate network DRA", func() {
 		spec := newDRASpec()
 		validator := admitter.NewValidator(k8sfield.NewPath("fake"), spec, stubClusterConfigChecker{})
 		causes := validator.Validate()
-		Expect(causes).To(HaveLen(1))
-		Expect(causes[0].Message).To(Equal("vmi.spec.networks contains DRA networks but NetworkDevicesWithDRA feature gate is not enabled"))
-		Expect(causes[0].Field).To(Equal("fake.networks"))
+		expectedCauses := []metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueInvalid,
+			Message: "vmi.spec.networks contains DRA networks but NetworkDevicesWithDRA feature gate is not enabled",
+			Field:   "fake.networks",
+		}}
+		Expect(causes).To(Equal(expectedCauses))
 	})
 
 	It("should accept valid DRA network when feature gate is enabled", func() {
@@ -53,9 +56,12 @@ var _ = Describe("Validate network DRA", func() {
 		spec.Networks[0].ResourceClaim.ClaimName = ""
 		validator := admitter.NewValidator(k8sfield.NewPath("fake"), spec, stubClusterConfigChecker{networkDRAEnabled: true})
 		causes := validator.Validate()
-		Expect(causes).To(HaveLen(1))
-		Expect(causes[0].Message).To(Equal("claimName is required for DRA network"))
-		Expect(causes[0].Field).To(Equal("fake.networks[0].resourceClaim.claimName"))
+		expectedCauses := []metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueRequired,
+			Message: "claimName is required for DRA network",
+			Field:   "fake.networks[0].resourceClaim.claimName",
+		}}
+		Expect(causes).To(Equal(expectedCauses))
 	})
 
 	It("should reject DRA network with empty requestName", func() {
@@ -63,9 +69,12 @@ var _ = Describe("Validate network DRA", func() {
 		spec.Networks[0].ResourceClaim.RequestName = ""
 		validator := admitter.NewValidator(k8sfield.NewPath("fake"), spec, stubClusterConfigChecker{networkDRAEnabled: true})
 		causes := validator.Validate()
-		Expect(causes).To(HaveLen(1))
-		Expect(causes[0].Message).To(Equal("requestName is required for DRA network"))
-		Expect(causes[0].Field).To(Equal("fake.networks[0].resourceClaim.requestName"))
+		expectedCauses := []metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueRequired,
+			Message: "requestName is required for DRA network",
+			Field:   "fake.networks[0].resourceClaim.requestName",
+		}}
+		Expect(causes).To(Equal(expectedCauses))
 	})
 
 	It("should reject DRA network with non-existent resourceClaim reference", func() {
@@ -73,25 +82,24 @@ var _ = Describe("Validate network DRA", func() {
 		spec.Networks[0].ResourceClaim.ClaimName = "missing-claim"
 		validator := admitter.NewValidator(k8sfield.NewPath("fake"), spec, stubClusterConfigChecker{networkDRAEnabled: true})
 		causes := validator.Validate()
-		Expect(causes).To(HaveLen(1))
-		Expect(causes[0].Message).To(Equal(`network references resourceClaim "missing-claim" which is not defined in spec.resourceClaims`))
-		Expect(causes[0].Field).To(Equal("fake.networks[0].resourceClaim.claimName"))
+		expectedCauses := []metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueNotFound,
+			Message: `network references resourceClaim "missing-claim" which is not defined in spec.resourceClaims`,
+			Field:   "fake.networks[0].resourceClaim.claimName",
+		}}
+		Expect(causes).To(Equal(expectedCauses))
 	})
 
 	It("should reject duplicate claimName/requestName across DRA networks", func() {
 		spec := newDRASpec()
 		spec.Domain.Devices.Interfaces = []v1.Interface{
 			{
-				Name: "dra-net-1",
-				InterfaceBindingMethod: v1.InterfaceBindingMethod{
-					SRIOV: &v1.InterfaceSRIOV{},
-				},
+				Name:    "dra-net-1",
+				Binding: &v1.PluginBinding{Name: "netbinding"},
 			},
 			{
-				Name: "dra-net-2",
-				InterfaceBindingMethod: v1.InterfaceBindingMethod{
-					SRIOV: &v1.InterfaceSRIOV{},
-				},
+				Name:    "dra-net-2",
+				Binding: &v1.PluginBinding{Name: "netbinding"},
 			},
 		}
 		spec.Networks = []v1.Network{
@@ -116,25 +124,24 @@ var _ = Describe("Validate network DRA", func() {
 		}
 		validator := admitter.NewValidator(k8sfield.NewPath("fake"), spec, stubClusterConfigChecker{networkDRAEnabled: true})
 		causes := validator.Validate()
-		Expect(causes).To(HaveLen(1))
-		Expect(causes[0].Message).To(Equal(`duplicate claimName/requestName combination "claim1/vf"`))
-		Expect(causes[0].Field).To(Equal("fake.networks[1]"))
+		expectedCauses := []metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueDuplicate,
+			Message: `duplicate claimName/requestName combination "claim1/vf"`,
+			Field:   "fake.networks[1]",
+		}}
+		Expect(causes).To(Equal(expectedCauses))
 	})
 
 	It("should reject mixing Multus and DRA networks", func() {
 		spec := newDRASpec()
 		spec.Domain.Devices.Interfaces = []v1.Interface{
 			{
-				Name: "multus-net",
-				InterfaceBindingMethod: v1.InterfaceBindingMethod{
-					SRIOV: &v1.InterfaceSRIOV{},
-				},
+				Name:    "multus-net",
+				Binding: &v1.PluginBinding{Name: "netbinding"},
 			},
 			{
-				Name: "dra-net",
-				InterfaceBindingMethod: v1.InterfaceBindingMethod{
-					SRIOV: &v1.InterfaceSRIOV{},
-				},
+				Name:    "dra-net",
+				Binding: &v1.PluginBinding{Name: "netbinding"},
 			},
 		}
 		spec.Networks = []v1.Network{
@@ -146,21 +153,28 @@ var _ = Describe("Validate network DRA", func() {
 		}
 		validator := admitter.NewValidator(k8sfield.NewPath("fake"), spec, stubClusterConfigChecker{networkDRAEnabled: true})
 		causes := validator.Validate()
-		Expect(causes).To(HaveLen(1))
-		Expect(causes[0].Message).To(Equal("mixing Multus and DRA resourceClaim networks in the same VMI is not supported"))
-		Expect(causes[0].Field).To(Equal("fake.networks"))
+		expectedCauses := []metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueInvalid,
+			Message: "mixing Multus and DRA resourceClaim networks in the same VMI is not supported",
+			Field:   "fake.networks",
+		}}
+		Expect(causes).To(Equal(expectedCauses))
 	})
 
-	It("should reject DRA network with non-SRIOV interface binding", func() {
-		spec := newDRASpec()
-		spec.Domain.Devices.Interfaces[0] = *v1.DefaultBridgeNetworkInterface()
-		spec.Domain.Devices.Interfaces[0].Name = "dra-net"
-		validator := admitter.NewValidator(k8sfield.NewPath("fake"), spec, stubClusterConfigChecker{networkDRAEnabled: true})
-		causes := validator.Validate()
-		Expect(causes).To(HaveLen(1))
-		Expect(causes[0].Message).To(Equal(`DRA network "dra-net" requires an SR-IOV or binding plugin interface`))
-		Expect(causes[0].Field).To(Equal("fake.domain.devices.interfaces"))
-	})
+	DescribeTable("should reject DRA network with core interface binding",
+		func(iface v1.Interface) {
+			spec := newDRASpec()
+			iface.Name = "dra-net"
+			spec.Domain.Devices.Interfaces = []v1.Interface{iface}
+			validator := admitter.NewValidator(k8sfield.NewPath("fake"), spec, stubClusterConfigChecker{networkDRAEnabled: true})
+			causes := validator.Validate()
+			Expect(causes).To(ContainElement(HaveField("Message", `DRA network "dra-net" requires a binding plugin interface`)))
+		},
+		Entry("bridge", v1.Interface{InterfaceBindingMethod: v1.InterfaceBindingMethod{Bridge: &v1.InterfaceBridge{}}}),
+		Entry("masquerade", v1.Interface{InterfaceBindingMethod: v1.InterfaceBindingMethod{Masquerade: &v1.InterfaceMasquerade{}}}),
+		Entry("SR-IOV", v1.Interface{InterfaceBindingMethod: v1.InterfaceBindingMethod{SRIOV: &v1.InterfaceSRIOV{}}}),
+		Entry("passtBinding", v1.Interface{InterfaceBindingMethod: v1.InterfaceBindingMethod{PasstBinding: &v1.InterfacePasstBinding{}}}),
+	)
 
 	It("should accept DRA network with plugin interface binding", func() {
 		spec := newDRASpec()
@@ -193,9 +207,12 @@ var _ = Describe("Validate network DRA", func() {
 		spec.Domain.Devices.Interfaces = nil
 		validator := admitter.NewValidator(k8sfield.NewPath("fake"), spec, stubClusterConfigChecker{networkDRAEnabled: true})
 		causes := validator.Validate()
-		Expect(causes).To(HaveLen(1))
-		Expect(causes[0].Message).To(Equal("fake.networks[0].name 'dra-net' not found."))
-		Expect(causes[0].Field).To(Equal("fake.networks[0].name"))
+		expectedCauses := []metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueRequired,
+			Message: "fake.networks[0].name 'dra-net' not found.",
+			Field:   "fake.networks[0].name",
+		}}
+		Expect(causes).To(Equal(expectedCauses))
 	})
 })
 
@@ -205,10 +222,8 @@ func newDRASpec() *v1.VirtualMachineInstanceSpec {
 			Devices: v1.Devices{
 				Interfaces: []v1.Interface{
 					{
-						Name: "dra-net",
-						InterfaceBindingMethod: v1.InterfaceBindingMethod{
-							SRIOV: &v1.InterfaceSRIOV{},
-						},
+						Name:    "dra-net",
+						Binding: &v1.PluginBinding{Name: "netbinding"},
 					},
 				},
 			},
@@ -225,7 +240,7 @@ func newDRASpec() *v1.VirtualMachineInstanceSpec {
 			},
 		},
 		ResourceClaims: []v1.VirtualMachineInstanceResourceClaim{
-			{Name: "claim1", ResourceClaimName: ptr.To("claim1")},
+			{Name: "claim1", ResourceClaimName: new("claim1")},
 		},
 	}
 }

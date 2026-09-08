@@ -282,7 +282,8 @@ func WithMemoryRequests(vmiSpecMemory *v1.Memory, overcommit int) ResourceRender
 		}
 
 		if memory != nil && memory.Value() > 0 {
-			if overcommit == 100 {
+			hugepages := vmiSpecMemory != nil && vmiSpecMemory.Hugepages != nil
+			if overcommit == 100 || hugepages {
 				renderer.vmRequests[k8sv1.ResourceMemory] = *memory
 			} else {
 				value := (memory.Value() * int64(100)) / int64(overcommit)
@@ -357,19 +358,6 @@ func WithCPUPinning(vmi *v1.VirtualMachineInstance, annotations map[string]strin
 		if memRequest, ok := renderer.vmRequests[k8sv1.ResourceMemory]; ok {
 			renderer.vmLimits[k8sv1.ResourceMemory] = memRequest
 		}
-	}
-}
-
-func WithNetworkResources(networkToResourceMap map[string]string) ResourceRendererOption {
-	return func(renderer *ResourceRenderer) {
-		resources := renderer.ResourceRequirements()
-		for _, resourceName := range networkToResourceMap {
-			if resourceName != "" {
-				requestResource(&resources, resourceName)
-			}
-		}
-		copyResources(resources.Limits, renderer.calculatedLimits)
-		copyResources(resources.Requests, renderer.calculatedRequests)
 	}
 }
 

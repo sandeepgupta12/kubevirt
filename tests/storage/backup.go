@@ -48,6 +48,7 @@ import (
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 
+	"kubevirt.io/kubevirt/pkg/apimachinery"
 	"kubevirt.io/kubevirt/pkg/libdv"
 	"kubevirt.io/kubevirt/pkg/libvmi"
 	"kubevirt.io/kubevirt/pkg/pointer"
@@ -56,7 +57,6 @@ import (
 	cbt "kubevirt.io/kubevirt/pkg/storage/cbt"
 	exportServer "kubevirt.io/kubevirt/pkg/storage/export/virt-exportserver"
 	"kubevirt.io/kubevirt/pkg/storage/velero"
-	"kubevirt.io/kubevirt/pkg/util/net/dns"
 
 	"kubevirt.io/kubevirt/tests/console"
 	cd "kubevirt.io/kubevirt/tests/containerdisk"
@@ -612,9 +612,6 @@ var _ = Describe(SIG("Backup", func() {
 		hotplugDv, err = virtClient.CdiClient().CdiV1beta1().DataVolumes(hotplugDv.Namespace).Create(context.Background(), hotplugDv, metav1.CreateOptions{})
 		Expect(err).ToNot(HaveOccurred())
 
-		By("Waiting for hotplug DataVolume to be ready")
-		libstorage.EventuallyDV(hotplugDv, 240, matcher.HaveSucceeded())
-
 		By("Hotplugging volume to running VM")
 		hotplugVolumeName := "hotplug-volume"
 		vm = libstorage.AddHotplugDiskAndVolume(virtClient, vm, hotplugVolumeName, hotplugDv.Name)
@@ -1128,10 +1125,6 @@ var _ = Describe(SIG("Backup", func() {
 
 		backup, err = virtClient.VirtualMachineBackup(backup.Namespace).Create(context.Background(), backup, metav1.CreateOptions{})
 		Expect(err).ToNot(HaveOccurred())
-
-		By("Waiting for the export to become ready")
-		backup = waitBackupExportReady(virtClient, backup.Namespace, backup.Name)
-		Expect(backup).ToNot(BeNil())
 
 		By(fmt.Sprintf("Waiting %s for the TTL to expire and VMExport to be cleaned up", ttlDuration))
 		Eventually(func() error {
@@ -1932,7 +1925,11 @@ func verifyExportPodAffinity(virtClient kubecli.KubevirtClient, vmbackup *backup
 		"Should match virt-launcher pods",
 	)
 
-	// Get the sanitized VM name (what virt-launcher pod uses)
+	Expect(affinityTerm.LabelSelector.MatchLabels).To(
+		HaveKeyWithValue(v1.VirtualMachineInstanceIDLabel, apimachinery.CalculateVirtualMachineInstanceID(vm.Name)),
+	)
+
+	By("Verifying export pod is scheduled on the same node as virt-launcher")
 	vmi, err := virtClient.VirtualMachineInstance(vm.Namespace).Get(
 		context.Background(),
 		vm.Name,
@@ -1940,16 +1937,6 @@ func verifyExportPodAffinity(virtClient kubecli.KubevirtClient, vmbackup *backup
 	)
 	Expect(err).ToNot(HaveOccurred())
 
-	// The virt-launcher pod label uses dns.SanitizeHostname logic
-	expectedVMName := dns.SanitizeHostname(vmi)
-
-	Expect(affinityTerm.LabelSelector.MatchLabels).To(
-		HaveKeyWithValue(v1.DeprecatedVirtualMachineNameLabel, expectedVMName),
-		"Should match the sanitized VM name",
-	)
-
-	// Verify the pods are actually on the same node
-	By("Verifying export pod is scheduled on the same node as virt-launcher")
 	// Find the virt-launcher pod using label selector
 	vmiPods, err := virtClient.CoreV1().Pods(vmi.Namespace).List(
 		context.Background(),

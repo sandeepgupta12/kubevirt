@@ -20,8 +20,6 @@
 package virtwrap
 
 import (
-	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"math"
 	"time"
@@ -31,11 +29,11 @@ import (
 	. "github.com/onsi/gomega/gstruct"
 	"go.uber.org/mock/gomock"
 	k8sv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"libvirt.org/go/libvirt"
 
-	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
 	cmdclient "kubevirt.io/kubevirt/pkg/virt-handler/cmd-client"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 
@@ -56,12 +54,6 @@ import (
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cli"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/testing"
 )
-
-func parseDefaultStallDetectorFactor(value string) float64 {
-	factor, err := virtconfig.ParseFactor(value, virtconfig.StallDetectorFactorPrecision)
-	Expect(err).NotTo(HaveOccurred())
-	return factor
-}
 
 var _ = Describe("Live migration source", func() {
 	var ctrl *gomock.Controller
@@ -104,7 +96,6 @@ var _ = Describe("Live migration source", func() {
 			virtconfig.DefaultDiskVerificationMemoryLimitBytes,
 			fakeCpuSetGetter,
 			false, // image volume enabled
-			false, // libvirt hooks server and client enabled
 			nil,
 			v1.KvmHypervisorName,
 			nil,
@@ -211,7 +202,6 @@ var _ = Describe("Live migration source", func() {
 				virtconfig.DefaultDiskVerificationMemoryLimitBytes,
 				fakeCpuSetGetter,
 				false, // image volume enabled
-				false, // libvirt hooks server and client enabled
 				nil,
 				v1.KvmHypervisorName,
 				nil,
@@ -253,7 +243,7 @@ var _ = Describe("Live migration source", func() {
 			})
 			original, _ := libvirtDomainManager.metadataCache.Migration.Load()
 
-			Expect(libvirtDomainManager.cancelMigration(vmi)).To(Succeed())
+			libvirtDomainManager.cancelMigration(vmi)
 
 			after, _ := libvirtDomainManager.metadataCache.Migration.Load()
 			Expect(after.AbortStatus).To(Equal(original.AbortStatus))
@@ -264,7 +254,7 @@ var _ = Describe("Live migration source", func() {
 				m.EndTimestamp = pointer.P(metav1.Now())
 			})
 
-			Expect(libvirtDomainManager.cancelMigration(vmi)).To(Succeed())
+			libvirtDomainManager.cancelMigration(vmi)
 
 			after, _ := libvirtDomainManager.metadataCache.Migration.Load()
 			Expect(after.AbortStatus).To(Equal(""))
@@ -273,7 +263,7 @@ var _ = Describe("Live migration source", func() {
 		It("cancelMigration should no-op when abort is already in progress", func() {
 			libvirtDomainManager.setMigrationAbortStatus(v1.MigrationAbortInProgress)
 
-			Expect(libvirtDomainManager.cancelMigration(vmi)).To(Succeed())
+			libvirtDomainManager.cancelMigration(vmi)
 
 			after, _ := libvirtDomainManager.metadataCache.Migration.Load()
 			Expect(after.AbortStatus).To(Equal(string(v1.MigrationAbortInProgress)))
@@ -282,7 +272,7 @@ var _ = Describe("Live migration source", func() {
 		It("cancelMigration should no-op when abort already succeeded", func() {
 			libvirtDomainManager.setMigrationAbortStatus(v1.MigrationAbortSucceeded)
 
-			Expect(libvirtDomainManager.cancelMigration(vmi)).To(Succeed())
+			libvirtDomainManager.cancelMigration(vmi)
 
 			after, _ := libvirtDomainManager.metadataCache.Migration.Load()
 			Expect(after.AbortStatus).To(Equal(string(v1.MigrationAbortSucceeded)))
@@ -359,161 +349,6 @@ var _ = Describe("Live migration source", func() {
 
 			Entry("returns error when no path is set in source",
 				&libvirtxml.DomainDiskSource{}, "", true),
-		)
-	})
-
-	Context("updateFilePathsToNewDomain", func() {
-		targetNS := "target-ns"
-		vmi := &v1.VirtualMachineInstance{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: "source-ns",
-			},
-			Status: v1.VirtualMachineInstanceStatus{
-				MigrationState: &v1.VirtualMachineInstanceMigrationState{
-					TargetState: &v1.VirtualMachineInstanceMigrationTargetState{
-						VirtualMachineInstanceCommonMigrationState: v1.VirtualMachineInstanceCommonMigrationState{
-							DomainNamespace: &targetNS,
-						},
-					},
-				},
-			},
-		}
-
-		DescribeTable("namespace replacement in disk file paths",
-			func(source api.DiskSource, expectedFile, expectedDataStoreFile string) {
-				domSpec := &api.DomainSpec{
-					Devices: api.Devices{
-						Disks: []api.Disk{
-							{Alias: api.NewUserDefinedAlias("disk0"), Source: source},
-						},
-					},
-				}
-				updateFilePathsToNewDomain(vmi, domSpec)
-				Expect(domSpec.Devices.Disks[0].Source.File).To(Equal(expectedFile))
-				if expectedDataStoreFile != "" {
-					Expect(domSpec.Devices.Disks[0].Source.DataStore.Source.File).To(Equal(expectedDataStoreFile))
-				}
-			},
-			Entry("plain file path containing source namespace is rewritten to target namespace",
-				api.DiskSource{File: "source-ns/my-vm/disk.img"},
-				"target-ns/my-vm/disk.img", ""),
-
-			Entry("plain file path without namespace is left unchanged",
-				api.DiskSource{File: "disk.img"},
-				"disk.img", ""),
-
-			Entry("overlay disk: overlay qcow2 file containing namespace is rewritten",
-				api.DiskSource{
-					File: "source-ns/cbt/vol.qcow2",
-					DataStore: &api.DataStore{
-						Source: &api.DiskSource{File: "/var/run/kubevirt-private/vmi-disks/vol/disk.img"},
-					},
-				},
-				"target-ns/cbt/vol.qcow2",
-				"/var/run/kubevirt-private/vmi-disks/vol/disk.img"),
-
-			Entry("overlay disk: DataStore backing file containing namespace is rewritten",
-				api.DiskSource{
-					File: "/var/lib/libvirt/qemu/cbt/vol.qcow2",
-					DataStore: &api.DataStore{
-						Source: &api.DiskSource{File: "source-ns/vol/disk.img"},
-					},
-				},
-				"/var/lib/libvirt/qemu/cbt/vol.qcow2",
-				"target-ns/vol/disk.img"),
-
-			Entry("overlay disk: both qcow2 and DataStore backing file contain namespace, both rewritten",
-				api.DiskSource{
-					File: "source-ns/cbt/vol.qcow2",
-					DataStore: &api.DataStore{
-						Source: &api.DiskSource{File: "source-ns/vol/disk.img"},
-					},
-				},
-				"target-ns/cbt/vol.qcow2",
-				"target-ns/vol/disk.img"),
-
-			Entry("overlay disk: DataStore backing file without namespace is left unchanged",
-				api.DiskSource{
-					File: "/var/lib/libvirt/qemu/cbt/vol.qcow2",
-					DataStore: &api.DataStore{
-						Source: &api.DiskSource{File: "/var/run/kubevirt-private/vmi-disks/vol/disk.img"},
-					},
-				},
-				"/var/lib/libvirt/qemu/cbt/vol.qcow2",
-				"/var/run/kubevirt-private/vmi-disks/vol/disk.img"),
-		)
-	})
-
-	Context("convertDisks", func() {
-		DescribeTable("syncing spec file paths into migratable libvirt XML",
-			func(specSource api.DiskSource, libvirtSource *libvirtxml.DomainDiskSource,
-				expectedFile, expectedDataStoreFile, expectedDataStoreBlockDev string) {
-				domSpec := &api.DomainSpec{
-					Devices: api.Devices{
-						Disks: []api.Disk{
-							{Alias: api.NewUserDefinedAlias("disk0"), Source: specSource},
-						},
-					},
-				}
-				domcfg := &libvirtxml.Domain{
-					Devices: &libvirtxml.DomainDeviceList{
-						Disks: []libvirtxml.DomainDisk{
-							{Alias: &libvirtxml.DomainAlias{Name: "ua-disk0"}, Source: libvirtSource},
-						},
-					},
-				}
-				Expect(convertDisks(domSpec, domcfg)).To(Succeed())
-				Expect(domcfg.Devices.Disks[0].Source.File.File).To(Equal(expectedFile))
-				if expectedDataStoreFile != "" {
-					Expect(domcfg.Devices.Disks[0].Source.DataStore.Source.File.File).To(Equal(expectedDataStoreFile))
-				}
-				if expectedDataStoreBlockDev != "" {
-					Expect(domcfg.Devices.Disks[0].Source.DataStore.Source.Block).NotTo(BeNil())
-					Expect(domcfg.Devices.Disks[0].Source.DataStore.Source.Block.Dev).To(Equal(expectedDataStoreBlockDev))
-					Expect(domcfg.Devices.Disks[0].Source.DataStore.Source.File).To(BeNil())
-				}
-			},
-			Entry("plain file disk: spec path overwrites stale libvirt XML path",
-				api.DiskSource{File: "/var/run/kubevirt-private/vmi-disks/vol/disk.img"},
-				&libvirtxml.DomainDiskSource{
-					File: &libvirtxml.DomainDiskSourceFile{File: "/var/run/kubevirt-private/vmi-disks/vol/old-disk.img"},
-				},
-				"/var/run/kubevirt-private/vmi-disks/vol/disk.img", "", ""),
-
-			Entry("CBT overlay disk with file backend: both qcow2 and backing store overwrite stale libvirt XML",
-				api.DiskSource{
-					File: "/var/lib/libvirt/qemu/cbt/vol.qcow2",
-					DataStore: &api.DataStore{
-						Source: &api.DiskSource{File: "/var/run/kubevirt-private/vmi-disks/vol/disk.img"},
-					},
-				},
-				&libvirtxml.DomainDiskSource{
-					File: &libvirtxml.DomainDiskSourceFile{File: "/var/lib/libvirt/qemu/cbt/old-vol.qcow2"},
-					DataStore: &libvirtxml.DomainDiskDataStore{
-						Source: &libvirtxml.DomainDiskSource{
-							File: &libvirtxml.DomainDiskSourceFile{File: "/var/run/kubevirt-private/vmi-disks/vol/old-disk.img"},
-						},
-					},
-				},
-				"/var/lib/libvirt/qemu/cbt/vol.qcow2",
-				"/var/run/kubevirt-private/vmi-disks/vol/disk.img", ""),
-
-			Entry("CBT overlay disk with block backend: only qcow2 overwritten, block backend unchanged",
-				api.DiskSource{
-					File: "/var/lib/libvirt/qemu/cbt/vol.qcow2",
-					DataStore: &api.DataStore{
-						Source: &api.DiskSource{Dev: "/dev/vol"},
-					},
-				},
-				&libvirtxml.DomainDiskSource{
-					File: &libvirtxml.DomainDiskSourceFile{File: "/var/lib/libvirt/qemu/cbt/old-vol.qcow2"},
-					DataStore: &libvirtxml.DomainDiskDataStore{
-						Source: &libvirtxml.DomainDiskSource{
-							Block: &libvirtxml.DomainDiskSourceBlock{Dev: "/dev/vol"},
-						},
-					},
-				},
-				"/var/lib/libvirt/qemu/cbt/vol.qcow2", "", "/dev/vol"),
 		)
 	})
 
@@ -862,7 +697,7 @@ var _ = Describe("Live migration source", func() {
 	Context("Migration monitor stall detector", func() {
 		const (
 			testCompletionTimeSec int64  = 300
-			testSwitchoverTimeout uint64 = 60
+			testSwitchoverTimeout int64  = 60
 			testMaxDowntimeMs     uint64 = 900
 		)
 
@@ -891,14 +726,14 @@ var _ = Describe("Live migration source", func() {
 		BeforeEach(func() {
 			options := &cmdclient.MigrationOptions{
 				StallDetectorOptions: &cmdclient.StallDetectorOptions{
-					StallMargin:               float64(4) / 100,
+					StallMargin:               4,
 					StallProgressTimeout:      25,
 					SwitchoverTimeout:         testSwitchoverTimeout,
-					EwmaAlpha:                 parseDefaultStallDetectorFactor("0.4"),
-					PrecopyPossibleFactor:     parseDefaultStallDetectorFactor("1.5"),
-					PatienceWindowDecayFactor: parseDefaultStallDetectorFactor("0.5"),
+					EwmaAlpha:                 resource.MustParse("0.4"),
+					PrecopyPossibleFactor:     resource.MustParse("1.5"),
+					PatienceWindowDecayFactor: resource.MustParse("0.5"),
 					SearchLocalMinima:         true,
-					CompletionTimeoutFactor:   parseDefaultStallDetectorFactor("2.0"),
+					CompletionTimeoutFactor:   resource.MustParse("2.0"),
 				},
 				MaxDowntimeMs: testMaxDowntimeMs,
 			}
@@ -1019,20 +854,20 @@ var _ = Describe("Live migration source", func() {
 
 		Describe("updateBandwidthEstimate", func() {
 			It("EWMA calculation is correct", func() {
-				alpha := sd.stallDetectorOptions.EwmaAlpha
+				alpha := sd.stallDetectorOptions.EwmaAlpha.AsApproximateFloat64()
 
 				sd.updateBandwidthEstimate(1000, monitor.logger)
 				Expect(sd.ewmaBandwidthBps).To(Equal(float64(1000)))
 
 				sd.updateBandwidthEstimate(2000, monitor.logger)
-				Expect(sd.ewmaBandwidthBps).To(Equal(alpha*2000 + (1-alpha)*1000))
+				Expect(sd.ewmaBandwidthBps).To(BeNumerically("~", alpha*2000+(1-alpha)*1000))
 
 				sd.updateBandwidthEstimate(500, monitor.logger)
-				Expect(sd.ewmaBandwidthBps).To(Equal(alpha*500 + (1-alpha)*(alpha*2000+(1-alpha)*1000)))
+				Expect(sd.ewmaBandwidthBps).To(BeNumerically("~", alpha*500+(1-alpha)*(alpha*2000+(1-alpha)*1000)))
 			})
 
 			It("should use configured EwmaAlpha from StallDetectorOptions", func() {
-				sd.stallDetectorOptions.EwmaAlpha = 0.2
+				sd.stallDetectorOptions.EwmaAlpha = resource.MustParse("0.2")
 				sd.updateBandwidthEstimate(1000, monitor.logger)
 				sd.updateBandwidthEstimate(2000, monitor.logger)
 				Expect(sd.ewmaBandwidthBps).To(Equal(1200.0))
@@ -1115,9 +950,9 @@ var _ = Describe("Live migration source", func() {
 
 			It("should use configured StallMargin from StallDetectorOptions", func() {
 				sd.minRecordOutsideWindow = iterationRecord{remainingBytes: 1000}
-				sd.stallDetectorOptions.StallMargin = 0.10
+				sd.stallDetectorOptions.StallMargin = 10
 				Expect(sd.checkStallCondition(955, monitor.logger)).To(BeTrue())
-				sd.stallDetectorOptions.StallMargin = float64(4) / 100
+				sd.stallDetectorOptions.StallMargin = 4
 				Expect(sd.checkStallCondition(955, monitor.logger)).To(BeFalse())
 			})
 		})
@@ -1330,7 +1165,7 @@ var _ = Describe("Live migration source", func() {
 			})
 
 			It("should return actionAbort when estimated downtime far exceeds max allowed downtime", func() {
-				sd.stallDetectorOptions.PrecopyPossibleFactor = 2.0
+				sd.stallDetectorOptions.PrecopyPossibleFactor = resource.MustParse("2.0")
 				estimatedDowntimeMs := uint32(float64(sd.maxDowntimeMs)*2.0) + 1
 				action, _ := sd.decideAction(iterationRecord{}, estimatedDowntimeMs, monitor.start, testCompletionTimeSec, monitor.logger)
 				Expect(action).To(Equal(actionAbort))
@@ -1417,7 +1252,7 @@ var _ = Describe("Live migration source", func() {
 				monitor.triggerConvergenceAction(mockDomain, actionHardStopAndCopy, "test hard stop", monitor.logger)
 				Expect(sd.switchoverInitiated).To(BeTrue())
 				elapsedSeconds := (time.Now().UTC().UnixNano() - monitor.start) / int64(time.Second)
-				Expect(monitor.switchOverDeadline).To(BeNumerically("~", elapsedSeconds+int64(testSwitchoverTimeout), 2))
+				Expect(monitor.switchOverDeadline).To(BeNumerically("~", elapsedSeconds+testSwitchoverTimeout, 2))
 			})
 
 			It("should set max downtime to maxDowntimeMs for actionSoftStopAndCopy", func() {
@@ -1426,7 +1261,7 @@ var _ = Describe("Live migration source", func() {
 				monitor.triggerConvergenceAction(mockDomain, actionSoftStopAndCopy, "test soft stop", monitor.logger)
 				Expect(sd.switchoverInitiated).To(BeTrue())
 				elapsedSeconds := (time.Now().UTC().UnixNano() - monitor.start) / int64(time.Second)
-				Expect(monitor.switchOverDeadline).To(BeNumerically("~", elapsedSeconds+int64(testSwitchoverTimeout), 2))
+				Expect(monitor.switchOverDeadline).To(BeNumerically("~", elapsedSeconds+testSwitchoverTimeout, 2))
 			})
 
 			It("should reset switchoverInitiated when MigrateSetMaxDowntime fails for actionHardStopAndCopy", func() {
@@ -1573,12 +1408,12 @@ var _ = Describe("Live migration source", func() {
 				Expect(sd.switchoverInitiated).To(BeTrue())
 				Expect(monitor.acceptableCompletionTime).To(Equal(originalTimeout * 2))
 				elapsedSeconds := pastTimeoutNs() / int64(time.Second)
-				Expect(monitor.switchOverDeadline).To(Equal(elapsedSeconds + int64(testSwitchoverTimeout)))
+				Expect(monitor.switchOverDeadline).To(Equal(elapsedSeconds + testSwitchoverTimeout))
 			})
 
 			It("should scale acceptableCompletionTime by CompletionTimeoutFactor when forcing switchover", func() {
 				monitor.options.AllowWorkloadDisruption = true
-				monitor.options.StallDetectorOptions.CompletionTimeoutFactor = 3
+				monitor.options.StallDetectorOptions.CompletionTimeoutFactor = resource.MustParse("3")
 				sd.ewmaBandwidthBps = 1000
 
 				mockDomain.EXPECT().MigrateSetMaxDowntime(uint64(migrationutils.QEMUMaxMigrationDowntimeMS), uint32(0)).Times(1).Return(nil)
@@ -1652,17 +1487,17 @@ var _ = Describe("Live migration source", func() {
 			customOptions := &cmdclient.MigrationOptions{
 				MaxDowntimeMs: testMaxDowntimeMs,
 				StallDetectorOptions: &cmdclient.StallDetectorOptions{
-					StallMargin:             0.08,
+					StallMargin:             8,
 					StallProgressTimeout:    10,
 					SwitchoverTimeout:       42,
-					EwmaAlpha:               0.25,
-					PrecopyPossibleFactor:   2.0,
+					EwmaAlpha:               resource.MustParse("0.25"),
+					PrecopyPossibleFactor:   resource.MustParse("2.0"),
 					SearchLocalMinima:       false,
-					CompletionTimeoutFactor: 2,
+					CompletionTimeoutFactor: resource.MustParse("2"),
 				},
 			}
 			m := newMigrationMonitor(vmi, libvirtDomainManager, customOptions, make(chan struct{}, 1))
-			Expect(m.stallDetector.stallDetectorOptions).To(Equal(*customOptions.StallDetectorOptions))
+			Expect(equality.Semantic.DeepEqual(m.stallDetector.stallDetectorOptions, *customOptions.StallDetectorOptions)).To(BeTrue())
 			Expect(m.stallDetector.maxDowntimeMs).To(Equal(customOptions.MaxDowntimeMs))
 		})
 	})
@@ -1692,13 +1527,11 @@ var _ = Describe("migratableDomXML", func() {
 </domain>`
 		vmi := newVMI("testns", "kubevirt")
 		mockLibvirt.DomainEXPECT().GetXMLDesc(libvirt.DOMAIN_XML_MIGRATABLE).MaxTimes(1).Return(domXML, nil)
-		domSpec := &api.DomainSpec{}
-		Expect(xml.Unmarshal([]byte(domXML), domSpec)).To(Succeed())
-		newXML, err := migratableDomXML(mockLibvirt.VirtDomain, vmi, domSpec, false)
+		newXML, err := migratableDomXML(mockLibvirt.VirtDomain, vmi)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(newXML).To(Equal(expectedXML))
 	})
-	It("should change CPU pinning according to migration metadata", func() {
+	It("should not modify CPU pinning (handled by premigration hook server)", func() {
 		domXML := `<domain type="kvm" id="1">
   <name>kubevirt</name>
   <vcpu placement="static">2</vcpu>
@@ -1707,60 +1540,18 @@ var _ = Describe("migratableDomXML", func() {
     <vcpupin vcpu="1" cpuset="5"></vcpupin>
   </cputune>
 </domain>`
-		// migratableDomXML() removes the migration block but not its ident, which is its own token, hence the blank line below
-		expectedXML := `<domain type="kvm" id="1">
-  <name>kubevirt</name>
-  <vcpu placement="static">2</vcpu>
-  <cputune>
-    <vcpupin vcpu="0" cpuset="6"></vcpupin>
-    <vcpupin vcpu="1" cpuset="7"></vcpupin>
-  </cputune>
-  <cpu>
-    <topology sockets="1" cores="2" threads="1"></topology>
-  </cpu>
-</domain>`
+		expectedXML := domXML
 
-		By("creating a VMI with dedicated CPU cores")
 		vmi := newVMI("testns", "kubevirt")
 		vmi.Spec.Domain.CPU = &v1.CPU{
 			Cores:                 2,
 			DedicatedCPUPlacement: true,
 		}
 
-		By("making up a target topology")
-		topology := &cmdv1.Topology{NumaCells: []*cmdv1.Cell{{
-			Id: 0,
-			Cpus: []*cmdv1.CPU{
-				{
-					Id:       6,
-					Siblings: []uint32{6},
-				},
-				{
-					Id:       7,
-					Siblings: []uint32{7},
-				},
-			},
-		}}}
-		targetNodeTopology, err := json.Marshal(topology)
-		Expect(err).NotTo(HaveOccurred(), "failed to marshall the topology")
-
-		By("saving that topology in the migration state of the VMI")
-		vmi.Status.MigrationState = &v1.VirtualMachineInstanceMigrationState{
-			TargetCPUSet:       []int{6, 7},
-			TargetNodeTopology: string(targetNodeTopology),
-		}
-
-		By("generated the domain XML for a migration to that target")
 		mockLibvirt.DomainEXPECT().GetXMLDesc(libvirt.DOMAIN_XML_MIGRATABLE).MaxTimes(1).Return(domXML, nil)
-		domSpec := &api.DomainSpec{}
-		Expect(xml.Unmarshal([]byte(domXML), domSpec)).To(Succeed())
-		Expect(domSpec.VCPU).NotTo(BeNil())
-		Expect(domSpec.CPUTune).NotTo(BeNil())
-		newXML, err := migratableDomXML(mockLibvirt.VirtDomain, vmi, domSpec, false)
-		Expect(err).ToNot(HaveOccurred(), "failed to generate target domain XML")
-
-		By("ensuring the generated XML is accurate")
-		Expect(newXML).To(Equal(expectedXML), "the target XML is not as expected")
+		newXML, err := migratableDomXML(mockLibvirt.VirtDomain, vmi)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(newXML).To(Equal(expectedXML))
 	})
 	DescribeTable("slices section", func(domXML string) {
 		retDiskSize := func(disk *libvirtxml.DomainDisk) (int64, error) {
@@ -1813,9 +1604,7 @@ var _ = Describe("migratableDomXML", func() {
 			},
 		}
 		mockLibvirt.DomainEXPECT().GetXMLDesc(libvirt.DOMAIN_XML_MIGRATABLE).MaxTimes(1).Return(domXML, nil)
-		domSpec := &api.DomainSpec{}
-		Expect(xml.Unmarshal([]byte(domXML), domSpec)).To(Succeed())
-		newXML, err := migratableDomXML(mockLibvirt.VirtDomain, vmi, domSpec, false)
+		newXML, err := migratableDomXML(mockLibvirt.VirtDomain, vmi)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(newXML).To(Equal(expectedXML))
 	},
@@ -1882,10 +1671,92 @@ var _ = Describe("migratableDomXML", func() {
 		networkData := "FakeNetwork"
 		addCloudInitDisk(vmi, userData, networkData)
 		mockLibvirt.DomainEXPECT().GetXMLDesc(libvirt.DOMAIN_XML_MIGRATABLE).MaxTimes(1).Return(domXML, nil)
-		domSpec := &api.DomainSpec{}
-		Expect(xml.Unmarshal([]byte(domXML), domSpec)).To(Succeed())
-		newXML, err := migratableDomXML(mockLibvirt.VirtDomain, vmi, domSpec, false)
+		newXML, err := migratableDomXML(mockLibvirt.VirtDomain, vmi)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(newXML).To(Equal(expectedXML))
+	})
+})
+
+var _ = Describe("newDowntimeTuningConfig", func() {
+	It("returns nil when DowntimeTuning is absent", func() {
+		Expect(newDowntimeTuningConfig(300, nil)).To(BeNil())
+	})
+
+	It("applies defaults and clamps InitialMs to MaxDowntimeMs", func() {
+		cfg := newDowntimeTuningConfig(100, &v1.DowntimeTuningOptions{
+			InitialMs: pointer.P(int64(5000)),
+		})
+		Expect(cfg).ToNot(BeNil())
+		Expect(cfg.InitialMs).To(Equal(int64(100)), "InitialMs should be clamped to MaxDowntimeMs")
+		Expect(cfg.Steps).To(Equal(defaultDowntimeSteps))
+		Expect(cfg.StartAfterIteration).To(Equal(defaultStartAfterIteration))
+		Expect(cfg.CooldownSeconds).To(Equal(defaultCooldownSeconds))
+	})
+})
+
+var _ = Describe("tuneDowntime", func() {
+	var ctrl *gomock.Controller
+	var mockDomain *cli.MockVirDomain
+	var monitor *migrationMonitor
+	logger := log.DefaultLogger()
+
+	cfg := &downtimeTuningConfig{
+		MaxDowntimeMs:       1000,
+		InitialMs:           100,
+		Steps:               3,
+		StartAfterIteration: 2,
+		CooldownSeconds:     1,
+	}
+
+	BeforeEach(func() {
+		ctrl = gomock.NewController(GinkgoT())
+		mockDomain = cli.NewMockVirDomain(ctrl)
+		monitor = &migrationMonitor{downtimeTuning: cfg}
+	})
+
+	It("sets initial downtime on first call", func() {
+		mockDomain.EXPECT().MigrateSetMaxDowntime(uint64(100), uint32(0)).Return(nil)
+		monitor.tuneDowntime(mockDomain, nil, logger)
+		Expect(monitor.currentDowntimeMs).To(Equal(uint64(100)))
+	})
+
+	It("does nothing when stats is nil after initial call", func() {
+		monitor.currentDowntimeMs = 100
+		monitor.tuneDowntime(mockDomain, nil, logger)
+		Expect(monitor.currentDowntimeMs).To(Equal(uint64(100)))
+	})
+
+	It("does nothing before StartAfterIteration", func() {
+		monitor.currentDowntimeMs = 100
+		stats := &libvirt.DomainJobInfo{MemIterationSet: true, MemIteration: 1}
+		monitor.tuneDowntime(mockDomain, stats, logger)
+		Expect(monitor.currentDowntimeMs).To(Equal(uint64(100)))
+	})
+
+	It("steps up and respects ceiling", func() {
+		monitor.currentDowntimeMs = 100
+		stats := &libvirt.DomainJobInfo{MemIterationSet: true, MemIteration: 5}
+
+		mockDomain.EXPECT().MigrateSetMaxDowntime(gomock.Any(), uint32(0)).Times(3).Return(nil)
+
+		for i := 0; i < 5; i++ {
+			monitor.lastTunedAt = time.Time{}
+			monitor.tuneDowntime(mockDomain, stats, logger)
+		}
+		Expect(monitor.currentDowntimeMs).To(Equal(uint64(1000)))
+	})
+
+	It("respects cooldown", func() {
+		monitor.currentDowntimeMs = 100
+		monitor.lastTunedAt = time.Now()
+		stats := &libvirt.DomainJobInfo{MemIterationSet: true, MemIteration: 5}
+		monitor.tuneDowntime(mockDomain, stats, logger)
+		Expect(monitor.currentDowntimeMs).To(Equal(uint64(100)))
+	})
+
+	It("does nothing when tuning is nil", func() {
+		monitor.downtimeTuning = nil
+		monitor.tuneDowntime(mockDomain, nil, logger)
+		Expect(monitor.currentDowntimeMs).To(Equal(uint64(0)))
 	})
 })

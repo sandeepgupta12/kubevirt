@@ -49,9 +49,6 @@ const (
 	WorkloadEncryptionSEV = "WorkloadEncryptionSEV"
 	WorkloadEncryptionTDX = "WorkloadEncryptionTDX"
 	VSOCKGate             = "VSOCK"
-	// KubevirtSeccompProfile indicate that Kubevirt will install its custom profile and
-	// user can tell Kubevirt to use it
-	KubevirtSeccompProfile = "KubevirtSeccompProfile"
 	// AlignCPUsGate allows emulator thread to assign two extra CPUs if needed to complete even parity.
 	AlignCPUsGate = "AlignCPUs"
 
@@ -72,15 +69,6 @@ const (
 	// the need for an extra container for containerDisk, improving security by avoiding
 	// bind mounts in virt-handler.
 	ImageVolume = "ImageVolume"
-
-	// Owner: @Barakmor1
-	// Alpha: v1.8.0
-	// Beta: v1.9.0
-	//
-	// LibvirtHooksServerAndClient The LibvirtHooksServerAndClient FG enables running pre-migration
-	// hooks on the target virt-launcher pod, allowing domain XML mutations to be applied
-	// on the target before migration starts.
-	LibvirtHooksServerAndClient = "LibvirtHooksServerAndClient"
 
 	// Owner: @shellyka13
 	// Alpha: v1.6.0
@@ -157,18 +145,6 @@ const (
 	// HypervisorConfigurations field in KubeVirtConfiguration.
 	ConfigurableHypervisor = "ConfigurableHypervisor"
 
-	// PodSecondaryInterfaceNamingUpgrade enables the upgrade mechanism for VMs
-	// stuck with the obsolete ordinal naming scheme for their pod secondary networks
-	// Owner: SIG network
-	// Beta: v1.8
-	PodSecondaryInterfaceNamingUpgrade = "PodSecondaryInterfaceNamingUpgrade"
-
-	// ExternalNetResourceInjection disables the VMI controller query of NetworkAttachmentDefinition objects and
-	// the deployment of related RBAC rules by virt-operator.
-	// Owner: SIG network
-	// Beta: v1.8.0
-	ExternalNetResourceInjection = "ExternalNetResourceInjection"
-
 	// Owner: sig-compute / @MarSik
 	// Alpha: v1.8.0
 	// Beta: v1.9.0
@@ -183,14 +159,6 @@ const (
 	// Alpha: v1.8.0
 	// Beta: v1.9.0
 	Template = "Template"
-
-	// Owner: @bmordeha
-	// Alpha: v1.8.0
-	// Beta: v1.9.0
-	//
-	// VmiMemoryOverheadReport enables reporting the memory overhead in the VMI status.
-	// When enabled, the memory overhead is calculated and set in the VMI status.Memory.MemoryOverhead field.
-	VmiMemoryOverheadReport = "VmiMemoryOverheadReport"
 
 	// Owner: sig-storage / @mhenriks
 	// Alpha: v1.8.0
@@ -277,6 +245,13 @@ const (
 	// MigrationStallDetection enables iteration-aligned stall detection and migration convergence tuning.
 	MigrationStallDetection = "MigrationStallDetection"
 
+	// Owner: @michalskrivanek
+	// Alpha: v1.10.0
+	//
+	// MigrationDowntimeTuning enables iteration-aware downtime ramping for live
+	// migration convergence via the ExperimentalMigrationOptions.DowntimeTuning field.
+	MigrationDowntimeTuning = "MigrationDowntimeTuning"
+
 	// Owner: sig-compute / @lyarwood
 	// Alpha: v1.9.0
 	//
@@ -296,7 +271,6 @@ const (
 )
 
 func init() {
-	RegisterFeatureGate(FeatureGate{Name: LibvirtHooksServerAndClient, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: ImageVolume, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: CPUManager, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: IgnitionGate, State: Alpha})
@@ -310,7 +284,6 @@ func init() {
 	RegisterFeatureGate(FeatureGate{Name: WorkloadEncryptionSEV, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: WorkloadEncryptionTDX, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: VSOCKGate, State: Alpha})
-	RegisterFeatureGate(FeatureGate{Name: KubevirtSeccompProfile, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: AlignCPUsGate, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: NodeRestrictionGate, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: VirtIOFSStorageVolumeGate, State: Alpha})
@@ -325,11 +298,8 @@ func init() {
 	RegisterFeatureGate(FeatureGate{Name: ConfigurableHypervisor, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: PasstBinding, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: IncrementalBackupGate, State: Alpha})
-	RegisterFeatureGate(FeatureGate{Name: PodSecondaryInterfaceNamingUpgrade, State: Beta})
-	RegisterFeatureGate(FeatureGate{Name: ExternalNetResourceInjection, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: RebootPolicy, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: Template, State: Beta})
-	RegisterFeatureGate(FeatureGate{Name: VmiMemoryOverheadReport, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: ContainerPathVolumesGate, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: ReservedOverheadMemlock, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: OptOutRoleAggregation, State: Beta})
@@ -341,6 +311,7 @@ func init() {
 	RegisterFeatureGate(FeatureGate{Name: IOMMUFDGate, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: FirmwareAutoSelection, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: MigrationStallDetection, State: Alpha})
+	RegisterFeatureGate(FeatureGate{Name: MigrationDowntimeTuning, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: CrossArchitectureVirtualization, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: PortRangesSpec, State: Alpha})
 }

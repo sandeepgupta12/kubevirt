@@ -69,7 +69,11 @@ import (
 	"kubevirt.io/kubevirt/tools/vms-generator/utils"
 )
 
-var testHookSidecar = hooks.HookSidecar{Image: "test-image", ImagePullPolicy: "test-policy"}
+var testHookSidecar = hooks.HookSidecar{
+	Image:           "test-image",
+	ImagePullPolicy: "test-policy",
+	ResourceClaims:  []k8sv1.ResourceClaim{{Name: "test-claim", Request: "test-req"}},
+}
 
 var _ = Describe("Template", func() {
 	const expectedNetworkResource = "amazing-network-resource.com"
@@ -529,7 +533,7 @@ var _ = Describe("Template", func() {
 
 			DescribeTable("should work", func(arch string, ovmfPath string) {
 				config, kvStore, svc = configFactory(arch)
-				disableFeatureGate(featuregate.ImageVolume, featuregate.PodSecondaryInterfaceNamingUpgrade)
+				disableFeatureGate(featuregate.ImageVolume)
 				trueVar := true
 				annotations := map[string]string{
 					hooks.HookSidecarListAnnotationName: `[{"image": "some-image:v1", "imagePullPolicy": "IfNotPresent"}]`,
@@ -599,7 +603,6 @@ var _ = Describe("Template", func() {
 					"--ovmf-path", ovmfPath,
 					"--disk-memory-limit", strconv.Itoa(virtconfig.DefaultDiskVerificationMemoryLimitBytes),
 					"--hypervisor", config.GetHypervisor().Name,
-					"--libvirt-hook-server-and-client",
 				}))
 				Expect(pod.Spec.Containers[1].Name).To(Equal("hook-sidecar-0"))
 				Expect(pod.Spec.Containers[1].Image).To(Equal("some-image:v1"))
@@ -612,7 +615,7 @@ var _ = Describe("Template", func() {
 
 				hasPodNameEnvVar := false
 				for _, ev := range pod.Spec.Containers[0].Env {
-					if ev.Name == ENV_VAR_POD_NAME && ev.ValueFrom.FieldRef.FieldPath == "metadata.name" {
+					if ev.Name == envVarPodName && ev.ValueFrom.FieldRef.FieldPath == "metadata.name" {
 						hasPodNameEnvVar = true
 						break
 					}
@@ -1156,7 +1159,7 @@ var _ = Describe("Template", func() {
 		Context("with node selectors", func() {
 			DescribeTable("should add node selectors to template", func(arch string, ovmfPath string) {
 				config, kvStore, svc = configFactory(arch)
-				disableFeatureGate(featuregate.ImageVolume, featuregate.PodSecondaryInterfaceNamingUpgrade)
+				disableFeatureGate(featuregate.ImageVolume)
 
 				nodeSelector := map[string]string{
 					k8sv1.LabelHostname: "master",
@@ -1203,7 +1206,6 @@ var _ = Describe("Template", func() {
 					"--ovmf-path", ovmfPath,
 					"--disk-memory-limit", strconv.Itoa(virtconfig.DefaultDiskVerificationMemoryLimitBytes),
 					"--hypervisor", config.GetHypervisor().Name,
-					"--libvirt-hook-server-and-client",
 				}))
 				Expect(pod.Spec.Containers[1].Name).To(Equal("hook-sidecar-0"))
 				Expect(pod.Spec.Containers[1].Image).To(Equal("some-image:v1"))
@@ -2228,8 +2230,8 @@ var _ = Describe("Template", func() {
 				Expect(pod.Spec.Containers[0].Resources.Requests.Memory().String()).To(Equal(requestMemory))
 				Expect(pod.Spec.Containers[0].Resources.Limits.Memory().String()).To(Equal(limitMemory))
 			},
-				Entry("on amd64", "amd64", "1282971493", "2282971493"),
-				Entry("on arm64", "arm64", "1417189221", "2417189221"),
+				Entry("on amd64", "amd64", "1303943013", "2303943013"),
+				Entry("on arm64", "arm64", "1438160741", "2438160741"),
 			)
 			DescribeTable("should overcommit guest overhead if selected, by only adding the overhead to memory limits", func(arch string, limitMemory string) {
 				config, kvStore, svc = configFactory(arch)
@@ -2265,8 +2267,8 @@ var _ = Describe("Template", func() {
 				Expect(pod.Spec.Containers[0].Resources.Requests.Memory().String()).To(Equal("1G"))
 				Expect(pod.Spec.Containers[0].Resources.Limits.Memory().String()).To(Equal(limitMemory))
 			},
-				Entry("on amd64", "amd64", "2282971493"),
-				Entry("on arm64", "arm64", "2417189221"),
+				Entry("on amd64", "amd64", "2303943013"),
+				Entry("on arm64", "arm64", "2438160741"),
 			)
 			DescribeTable("should not add unset resources", func(arch string, requestMemory int) {
 				config, kvStore, svc = configFactory(arch)
@@ -2304,8 +2306,8 @@ var _ = Describe("Template", func() {
 				// Limits for KVM and TUN devices should be requested.
 				Expect(pod.Spec.Containers[0].Resources.Limits).ToNot(BeNil())
 			},
-				Entry("on amd64", "amd64", 362),
-				Entry("on arm64", "arm64", 497),
+				Entry("on amd64", "amd64", 383),
+				Entry("on arm64", "arm64", 518),
 			)
 
 			DescribeTable("should check autoattachGraphicsDevicse", func(arch string, autoAttach *bool, memory int) {
@@ -2341,12 +2343,12 @@ var _ = Describe("Template", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(pod.Spec.Containers[0].Resources.Requests.Memory().ToDec().ScaledValue(resource.Mega)).To(Equal(int64(memory)))
 			},
-				Entry("and consider graphics overhead if it is not set on amd64", "amd64", nil, 362),
-				Entry("and consider graphics overhead if it is set to true on amd64", "amd64", pointer.P(true), 362),
-				Entry("and not consider graphics overhead if it is set to false on amd64", "amd64", pointer.P(false), 329),
-				Entry("and consider graphics overhead if it is not set on arm64", "arm64", nil, 497),
-				Entry("and consider graphics overhead if it is set to true on arm64", "arm64", pointer.P(true), 497),
-				Entry("and not consider graphics overhead if it is set to false on arm64", "arm64", pointer.P(false), 463),
+				Entry("and consider graphics overhead if it is not set on amd64", "amd64", nil, 383),
+				Entry("and consider graphics overhead if it is set to true on amd64", "amd64", pointer.P(true), 383),
+				Entry("and not consider graphics overhead if it is set to false on amd64", "amd64", pointer.P(false), 350),
+				Entry("and consider graphics overhead if it is not set on arm64", "arm64", nil, 518),
+				Entry("and consider graphics overhead if it is set to true on arm64", "arm64", pointer.P(true), 518),
+				Entry("and not consider graphics overhead if it is set to false on arm64", "arm64", pointer.P(false), 484),
 			)
 			It("should calculate vcpus overhead based on guest toplogy", func() {
 				config, kvStore, svc = configFactory(defaultArch)
@@ -2562,7 +2564,7 @@ var _ = Describe("Template", func() {
 					Entry("memory requests only - not expect overcommit", notExpectOvercommit, setMemoryRequests),
 					Entry("memory limits only - not expect overcommit", notExpectOvercommit, setMemoryLimits),
 					Entry("guest memory only - expect overcommit", expectOvercommit, setGuestMemory),
-					Entry("hugepages memory only - expect overcommit", expectOvercommit, setHugePagesMemory),
+					Entry("hugepages memory only - not expect overcommit", notExpectOvercommit, setHugePagesMemory),
 
 					// Pairs of memory setters
 					Entry("memory requests and limits - not expect overcommit", notExpectOvercommit, setMemoryRequests, setMemoryLimits),
@@ -2570,7 +2572,7 @@ var _ = Describe("Template", func() {
 					Entry("memory requests and hugepages - not expect overcommit", notExpectOvercommit, setMemoryRequests, setHugePagesMemory),
 					Entry("memory limits and guest memory - not expect overcommit", notExpectOvercommit, setMemoryLimits, setGuestMemory),
 					Entry("memory limits and hugepages - not expect overcommit", notExpectOvercommit, setMemoryLimits, setHugePagesMemory),
-					Entry("guest memory and hugepages - expect overcommit", expectOvercommit, setGuestMemory, setHugePagesMemory),
+					Entry("guest memory and hugepages - not expect overcommit", notExpectOvercommit, setGuestMemory, setHugePagesMemory),
 
 					// Triplets of memory setters
 					Entry("memory requests, limits and guest memory - not expect overcommit", notExpectOvercommit, setMemoryRequests, setMemoryLimits, setGuestMemory),
@@ -2656,10 +2658,10 @@ var _ = Describe("Template", func() {
 						},
 					))
 			},
-				Entry("hugepages-2Mi on amd64", "amd64", "2Mi", 282),
-				Entry("hugepages-1Gi on amd64", "amd64", "1Gi", 282),
-				Entry("hugepages-2Mi on arm64", "arm64", "2Mi", 416),
-				Entry("hugepages-1Gi on arm64", "arm64", "1Gi", 416),
+				Entry("hugepages-2Mi on amd64", "amd64", "2Mi", 303),
+				Entry("hugepages-1Gi on amd64", "amd64", "1Gi", 303),
+				Entry("hugepages-2Mi on arm64", "arm64", "2Mi", 437),
+				Entry("hugepages-1Gi on arm64", "arm64", "1Gi", 437),
 			)
 			DescribeTable("should account for difference between guest and container requested memory ", func(arch string, memorySize int) {
 				config, kvStore, svc = configFactory(arch)
@@ -2736,8 +2738,8 @@ var _ = Describe("Template", func() {
 						},
 					))
 			},
-				Entry("on amd64", "amd64", 282),
-				Entry("on arm64", "arm64", 416),
+				Entry("on amd64", "amd64", 303),
+				Entry("on arm64", "arm64", 437),
 			)
 		})
 
@@ -3254,6 +3256,8 @@ var _ = Describe("Template", func() {
 				Name:  hooks.ContainerNameEnvVar,
 				Value: "hook-sidecar-0",
 			}))
+
+			Expect(pod.Spec.Containers[1].Resources.Claims).To(Equal(testHookSidecar.ResourceClaims))
 		})
 
 		Context("with pod networking", func() {
@@ -6268,131 +6272,6 @@ var _ = Describe("Template", func() {
 		})
 	})
 
-	Context("Network target annotations generation", func() {
-		const (
-			testNamespace = "default"
-
-			testKey = "netAnnotation"
-
-			initialValue = "netAnnotationInitial"
-			updatedValue = "netAnnotationUpdated"
-		)
-
-		It("Should call network target annotations generator when templating a migration target pod", func() {
-			generator := stubTargetAnnotationsGenerator{
-				annotations: map[string]string{testKey: updatedValue},
-			}
-
-			svc = NewTemplateService("kubevirt/virt-launcher",
-				240,
-				"/var/run/kubevirt",
-				"/var/run/kubevirt-ephemeral-disks",
-				"/var/run/kubevirt/container-disks",
-				v1.HotplugDiskDir,
-				"pull-secret-1",
-				pvcCache,
-				virtClient,
-				config,
-				qemuGid,
-				"kubevirt/vmexport",
-				resourceQuotaStore,
-				namespaceStore,
-				WithNetTargetAnnotationsGenerator(generator),
-			)
-
-			vmi := libvmi.New(libvmi.WithNamespace(testNamespace))
-
-			sourcePod, err := svc.RenderLaunchManifest(vmi)
-			Expect(err).ToNot(HaveOccurred())
-
-			sourcePod.Annotations[testKey] = initialValue
-
-			targetPod, err := svc.RenderMigrationManifest(vmi, nil, sourcePod)
-			Expect(err).ToNot(HaveOccurred())
-
-			Expect(targetPod.Annotations).To(HaveKeyWithValue(testKey, updatedValue))
-		})
-
-		It("Should fail templating a migration target pod when network target annotations generator fails", func() {
-			expectedErr := errors.New("some err")
-
-			generator := stubTargetAnnotationsGenerator{
-				annotations:   map[string]string{testKey: updatedValue},
-				generationErr: expectedErr,
-			}
-
-			svc = NewTemplateService("kubevirt/virt-launcher",
-				240,
-				"/var/run/kubevirt",
-				"/var/run/kubevirt-ephemeral-disks",
-				"/var/run/kubevirt/container-disks",
-				v1.HotplugDiskDir,
-				"pull-secret-1",
-				pvcCache,
-				virtClient,
-				config,
-				qemuGid,
-				"kubevirt/vmexport",
-				resourceQuotaStore,
-				namespaceStore,
-				WithNetTargetAnnotationsGenerator(generator),
-			)
-
-			vmi := libvmi.New(libvmi.WithNamespace(testNamespace))
-
-			sourcePod, err := svc.RenderLaunchManifest(vmi)
-			Expect(err).ToNot(HaveOccurred())
-
-			sourcePod.Annotations[testKey] = initialValue
-
-			_, err = svc.RenderMigrationManifest(vmi, nil, sourcePod)
-			Expect(err).To(MatchError(expectedErr))
-		})
-	})
-
-	Context("NAD query disablement", func() {
-		It("Should not query NAD when ExternalNetResourceInjection is enabled", func() {
-			config, kvStore, svc = configFactory(defaultArch)
-			enableFeatureGate(featuregate.ExternalNetResourceInjection)
-
-			svc = NewTemplateService("kubevirt/virt-launcher",
-				240,
-				"/var/run/kubevirt",
-				"/var/run/kubevirt-ephemeral-disks",
-				"/var/run/kubevirt/container-disks",
-				v1.HotplugDiskDir,
-				"pull-secret-1",
-				pvcCache,
-				virtClient,
-				config,
-				qemuGid,
-				"kubevirt/vmexport",
-				resourceQuotaStore,
-				namespaceStore,
-			)
-
-			const netName = "net1"
-
-			vmi := libvmi.New(
-				libvmi.WithNamespace("other-namespace"),
-				libvmi.WithInterface(libvmi.InterfaceDeviceWithBridgeBinding(netName)),
-				libvmi.WithNetwork(libvmi.MultusNetwork(netName, "test1")),
-			)
-
-			pod, err := svc.RenderLaunchManifest(vmi)
-			Expect(err).ToNot(HaveOccurred())
-
-			computeContainer := pod.Spec.Containers[0]
-			Expect(computeContainer.Name).To(Equal("compute"))
-
-			_, reqExists := computeContainer.Resources.Requests[expectedNetworkResource]
-			Expect(reqExists).To(BeFalse())
-
-			_, limExists := computeContainer.Resources.Limits[expectedNetworkResource]
-			Expect(limExists).To(BeFalse())
-		})
-	})
-
 	Context("FirmwareAutoSelection feature gate", func() {
 		It("should pass --firmware-auto-selection flag to virt-launcher when enabled", func() {
 			config, kvStore, svc = configFactory(defaultArch)
@@ -6516,10 +6395,8 @@ func newVMIWithDRANetwork(name string) *v1.VirtualMachineInstance {
 	vmi := api.NewMinimalVMI(name)
 	vmi.Spec.Domain.Devices.Interfaces = []v1.Interface{
 		{
-			Name: "dra-net",
-			InterfaceBindingMethod: v1.InterfaceBindingMethod{
-				SRIOV: &v1.InterfaceSRIOV{},
-			},
+			Name:    "dra-net",
+			Binding: &v1.PluginBinding{Name: "netbinding"},
 		},
 	}
 	vmi.Spec.Networks = []v1.Network{
@@ -6587,13 +6464,4 @@ type stubAnnotationsGenerator struct {
 
 func (sag stubAnnotationsGenerator) Generate(_ *v1.VirtualMachineInstance) (map[string]string, error) {
 	return sag.annotations, sag.generationErr
-}
-
-type stubTargetAnnotationsGenerator struct {
-	annotations   map[string]string
-	generationErr error
-}
-
-func (stag stubTargetAnnotationsGenerator) GenerateFromSource(_ *v1.VirtualMachineInstance, _ *k8sv1.Pod) (map[string]string, error) {
-	return stag.annotations, stag.generationErr
 }

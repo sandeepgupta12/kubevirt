@@ -441,8 +441,8 @@ type KernelInfo struct {
 	// +kubebuilder:validation:Format:=int64
 	// +kubebuilder:validation:Minimum:=0
 	// +kubebuilder:validation:Maximum:=4294967295
-	// Checksum is the checksum of the kernel image
-	Checksum uint32 `json:"checksum,omitempty"`
+	// deprecated; Checksum is the checksum of the kernel image
+	DeprecatedChecksum uint32 `json:"checksum,omitempty"`
 }
 
 // InitrdInfo show info about the initrd file
@@ -450,8 +450,8 @@ type InitrdInfo struct {
 	// +kubebuilder:validation:Format:=int64
 	// +kubebuilder:validation:Minimum:=0
 	// +kubebuilder:validation:Maximum:=4294967295
-	// Checksum is the checksum of the initrd file
-	Checksum uint32 `json:"checksum,omitempty"`
+	// deprecated; Checksum is the checksum of the initrd file
+	DeprecatedChecksum uint32 `json:"checksum,omitempty"`
 }
 
 // KernelBootStatus contains info about the kernelBootContainer
@@ -487,8 +487,8 @@ type ContainerDiskInfo struct {
 	// +kubebuilder:validation:Format:=int64
 	// +kubebuilder:validation:Minimum:=0
 	// +kubebuilder:validation:Maximum:=4294967295
-	// Checksum is the checksum of the rootdisk or kernel artifacts inside the containerdisk
-	Checksum uint32 `json:"checksum,omitempty"`
+	// deprecated; Checksum is the checksum of the rootdisk or kernel artifacts inside the containerdisk
+	DeprecatedChecksum uint32 `json:"checksum,omitempty"`
 }
 
 // VolumePhase indicates the current phase of the hotplug process.
@@ -1389,7 +1389,7 @@ const (
 	VirtualMachinePoolRevisionName string = "kubevirt.io/vm-pool-revision-name"
 
 	// DeprecatedVirtualMachineNameLabel is the name of the Virtual Machine
-	// Deprecated: Use VirtualMachineInstanceSelectorLabel instead. Kept for backwards compatibility.
+	// Deprecated: Use VirtualMachineInstanceIDLabel instead. Kept for backwards compatibility.
 	DeprecatedVirtualMachineNameLabel string = "vm.kubevirt.io/name"
 
 	// VirtualMachineInstanceIDLabel is applied to virt-launcher pods to provide a
@@ -3430,29 +3430,31 @@ type StallDetectorOptions struct {
 	// observed migration bandwidth. Must be in the range (0, 1]; zero is invalid because
 	// the estimate would never incorporate new samples. Higher values weight recent samples
 	// more heavily.
-	// Defaults to "0.4".
+	// Defaults to 0.4.
 	//+optional
-	EwmaAlpha *string `json:"ewmaAlpha,omitempty"`
+	EwmaAlpha *resource.Quantity `json:"ewmaAlpha,omitempty"`
 	// StallProgressTimeout is the duration in seconds of the sliding window used to track
 	// minimum remaining-bytes and detect when migration progress has stalled.
 	// Defaults to 40.
 	//+optional
-	StallProgressTimeout *uint64 `json:"stallProgressTimeout,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	StallProgressTimeout *int64 `json:"stallProgressTimeout,omitempty"`
 	// SwitchoverTimeout is the duration in seconds allowed for a stop-and-copy or post-copy
 	// switchover to complete after being triggered before the migration is aborted.
 	// Defaults to 60.
 	//+optional
-	SwitchoverTimeout *uint64 `json:"switchoverTimeout,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	SwitchoverTimeout *int64 `json:"switchoverTimeout,omitempty"`
 	// PrecopyPossibleFactor is the maximum factor by which estimated downtime may exceed
 	// MaxDowntime while still attempting a soft stop-and-copy instead of aborting the migration.
-	// Defaults to "1.5".
+	// Defaults to 1.5.
 	//+optional
-	PrecopyPossibleFactor *string `json:"precopyPossibleFactor,omitempty"`
+	PrecopyPossibleFactor *resource.Quantity `json:"precopyPossibleFactor,omitempty"`
 	// PatienceWindowDecayFactor is the factor by which the relaxation patience window is
 	// multiplied after each best-remaining-bytes relaxation step.
-	// Defaults to "0.5".
+	// Defaults to 0.5.
 	//+optional
-	PatienceWindowDecayFactor *string `json:"patienceWindowDecayFactor,omitempty"`
+	PatienceWindowDecayFactor *resource.Quantity `json:"patienceWindowDecayFactor,omitempty"`
 	// SearchLocalMinima controls whether convergence actions are delayed until remaining bytes
 	// reach a local minimum near the best observed value. When false, actions may trigger
 	// as soon as a stall is detected.
@@ -3462,9 +3464,9 @@ type StallDetectorOptions struct {
 	// CompletionTimeoutFactor multiplies the computed migration completion timeout to determine
 	// the total time budget for deciding whether a forced switchover can still finish in time,
 	// and to extend the abort deadline after initiating a completion-timeout-driven switchover.
-	// Defaults to "2".
+	// Defaults to 2.
 	//+optional
-	CompletionTimeoutFactor *string `json:"completionTimeoutFactor,omitempty"`
+	CompletionTimeoutFactor *resource.Quantity `json:"completionTimeoutFactor,omitempty"`
 }
 
 // MigrationCompression represents the compression method for live migration.
@@ -3482,12 +3484,42 @@ const (
 type ExperimentalMigrationOptions struct {
 	//+optional
 	StallDetector *StallDetectorOptions `json:"stallDetector,omitempty"`
+	// DowntimeTuning configures iteration-aware downtime ramping for live
+	// migration convergence.
+	//+optional
+	DowntimeTuning *DowntimeTuningOptions `json:"downtimeTuning,omitempty"`
 	// Compression selects the algorithm for compressing the live migration
 	// data stream. When omitted (nil) or set to "none", compression is
 	// disabled.
 	// +kubebuilder:validation:Enum=none;zstd
 	//+optional
 	Compression *MigrationCompression `json:"compression,omitempty"`
+}
+
+// DowntimeTuningOptions controls how virt-launcher gradually increases
+// max_downtime during live migration to help convergence.
+type DowntimeTuningOptions struct {
+	// InitialMs is the initial max_downtime value in milliseconds
+	// set at the start of migration. Tuning steps increase from this value.
+	// Defaults to 150.
+	// +kubebuilder:validation:Minimum=1
+	//+optional
+	InitialMs *int64 `json:"initialMs,omitempty"`
+	// Steps is the number of equal increments used to ramp from
+	// InitialMs to the cluster-level MaxDowntimeMs. Defaults to 7.
+	// +kubebuilder:validation:Minimum=1
+	//+optional
+	Steps *int32 `json:"steps,omitempty"`
+	// StartAfterIteration is the memory copy iteration after which
+	// downtime tuning begins. Defaults to 3.
+	// +kubebuilder:validation:Minimum=1
+	//+optional
+	StartAfterIteration *int64 `json:"startAfterIteration,omitempty"`
+	// CooldownSeconds is the minimum interval in seconds
+	// between successive downtime increases. Defaults to 10.
+	// +kubebuilder:validation:Minimum=1
+	//+optional
+	CooldownSeconds *int32 `json:"cooldownSeconds,omitempty"`
 }
 
 // VMIMConfigurationOptions holds the resolved migration options for a single migration.
@@ -3539,8 +3571,12 @@ type VMIMConfigurationOptions struct {
 	// permitted, migration will be switched to post-copy or the VMI will be
 	// paused to allow the migration to complete
 	AllowWorkloadDisruption *bool `json:"allowWorkloadDisruption,omitempty"`
-	// When set to true, DisableTLS will disable the additional layer of live migration encryption
-	// provided by KubeVirt. This is usually a bad idea. Defaults to false
+	// DisableTLS disables both TLS encryption and mutual TLS authentication
+	// on the migration proxy when set to true. This removes all cryptographic
+	// protection from the migration data stream.
+	// When disabled, implement network-level access controls to restrict
+	// migration traffic to trusted sources only.
+	// Defaults to false.
 	DisableTLS *bool `json:"disableTLS,omitempty"`
 	// Network is the name of the CNI network to use for live migrations. By default, migrations go
 	// through the pod network.
@@ -3604,8 +3640,12 @@ type MigrationConfiguration struct {
 	// permitted, migration will be switched to post-copy or the VMI will be
 	// paused to allow the migration to complete
 	AllowWorkloadDisruption *bool `json:"allowWorkloadDisruption,omitempty"`
-	// When set to true, DisableTLS will disable the additional layer of live migration encryption
-	// provided by KubeVirt. This is usually a bad idea. Defaults to false
+	// DisableTLS disables both TLS encryption and mutual TLS authentication
+	// on the migration proxy when set to true. This removes all cryptographic
+	// protection from the migration data stream.
+	// When disabled, implement network-level access controls to restrict
+	// migration traffic to trusted sources only.
+	// Defaults to false.
 	DisableTLS *bool `json:"disableTLS,omitempty"`
 	// Network is the name of the CNI network to use for live migrations. By default, migrations go
 	// through the pod network.

@@ -45,8 +45,11 @@ func virtControllerAlerts(namespace string) []promv1.Rule {
 		},
 		{
 			Alert: "NoReadyVirtController",
-			Expr:  intstr.FromString("cluster:kubevirt_virt_controller_ready:sum == 0"),
-			For:   ptr.To(promv1.Duration("10m")),
+			Expr: intstr.FromString(
+				"cluster:kubevirt_virt_controller_ready:sum == 0 " +
+					"and cluster:kubevirt_virt_controller_pods_running:count > 0",
+			),
+			For: ptr.To(promv1.Duration("10m")),
 			Annotations: map[string]string{
 				summaryAnnotationKey: "No ready virt-controller was detected for the last 10 min.",
 			},
@@ -93,6 +96,22 @@ func virtControllerAlerts(namespace string) []promv1.Rule {
 			Labels: map[string]string{
 				severityAlertLabelKey:        "warning",
 				operatorHealthImpactLabelKey: "warning",
+			},
+		},
+		{
+			// Cluster-wide count of failed virt-launcher pods, not a
+			// per-namespace alert. Do not sum by namespace: that would
+			// split the 200-pod threshold across VM namespaces. The
+			// install namespace is applied as a static label in Register().
+			Alert: "VirtLauncherPodsStuckFailed",
+			Expr:  intstr.FromString("sum(kube_pod_status_phase{phase='Failed', pod=~'virt-launcher-.*'}) >= 200"),
+			For:   ptr.To(promv1.Duration("10m")),
+			Annotations: map[string]string{
+				summaryAnnotationKey: "At least 200 virt-launcher pods are stuck in Failed state and not deleted for 10 minutes.",
+			},
+			Labels: map[string]string{
+				severityAlertLabelKey:        "critical",
+				operatorHealthImpactLabelKey: "critical",
 			},
 		},
 		{
