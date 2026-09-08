@@ -523,9 +523,9 @@ pull(
 
 pull(
     name = "busybox",
-    digest = "sha256:545e6a6310a27636260920bc07b994a299b6708a1b26910cfefd335fdfb60d2b",
-    registry = "registry.k8s.io",
-    repository = "busybox",
+    digest = "sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616",
+    registry = "index.docker.io",
+    repository = "library/busybox",
 )
 
 load("//images/virt-template:deps.bzl", "virt_template_images")
