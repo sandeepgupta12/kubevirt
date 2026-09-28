@@ -31,6 +31,7 @@ pkg_tar(
     name = "cirros-image-tar",
     srcs = select({
         "@io_bazel_rules_go//go/platform:linux_arm64": ["@cirros_image_aarch64//file"],
+        "//rpm:linux_ppc64le": ["@cirros_image_ppc64le//file"],
         "//conditions:default": ["@cirros_image//file"],
     }),
     mode = "440",
@@ -48,6 +49,7 @@ pkg_tar(
     name = "cirros-custom-image-tar",
     srcs = select({
         "@io_bazel_rules_go//go/platform:linux_arm64": ["@cirros_image_aarch64//file"],
+        "//rpm:linux_ppc64le": ["@cirros_image_ppc64le//file"],
         "//conditions:default": ["@cirros_image//file"],
     }),
     mode = "440",

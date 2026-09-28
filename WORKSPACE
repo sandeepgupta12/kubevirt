@@ -299,6 +299,14 @@ http_file(
 )
 
 http_file(
+    name = "cirros_image_ppc64le",
+    sha256 = "98641d8eda544a815aab1d584e56cc9d1d41f1f7da640d273b6db2124cae1450",
+    urls = [
+        "https://download.cirros-cloud.net/0.6.3/cirros-0.6.3-ppc64le-disk.img",
+    ],
+)
+
+http_file(
     name = "virtio_win_image",
     sha256 = "57b0f6dc8dc92dc2ae8621f8b1bfbd8a873de9bedc788c4c4b305ea28acc77cd",
     urls = [

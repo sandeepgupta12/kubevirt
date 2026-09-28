@@ -52,12 +52,12 @@ other_images_non_s390x="
     //cmd/cniplugins/passt-binding/cmd:network-passt-binding-cni-image
     //images/winrmcli:winrmcli-image
     //tests:conformance_image
+    //containerimages:cirros-container-disk-image
+    //containerimages:cirros-custom-container-disk-image
 "
 
 # Images for x86_64 + aarch64 only (no ppc64le, no s390x)
 other_images_x86_64_aarch64="
-    //containerimages:cirros-container-disk-image
-    //containerimages:cirros-custom-container-disk-image
     //containerimages:virtio-container-disk-image
 "
 
