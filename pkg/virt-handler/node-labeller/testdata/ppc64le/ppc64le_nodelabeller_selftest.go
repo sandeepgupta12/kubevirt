@@ -47,8 +47,18 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
+
+// xmlCommentRe matches XML comments including those with "--" inside them,
+// which are produced by some versions of virsh/libvirt but are illegal per the
+// XML 1.0 spec.  Go's encoding/xml rejects them, so we strip them first.
+var xmlCommentRe = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+func stripXMLComments(data []byte) []byte {
+	return xmlCommentRe.ReplaceAll(data, nil)
+}
 
 // ── constants mirroring pkg/virt-handler/node-labeller ──────────────────────
 
@@ -141,7 +151,7 @@ type parseResult struct {
 
 func loadDomCaps(xmlBytes []byte, arch interface{ supportsHostModel() bool; defaultVendor() string }) (*parseResult, error) {
 	var caps hostDomCapabilities
-	if err := xml.Unmarshal(xmlBytes, &caps); err != nil {
+	if err := xml.Unmarshal(stripXMLComments(xmlBytes), &caps); err != nil {
 		return nil, fmt.Errorf("unmarshal domcapabilities: %w", err)
 	}
 
@@ -189,7 +199,7 @@ func loadDomCaps(xmlBytes []byte, arch interface{ supportsHostModel() bool; defa
 
 func loadSupportedFeatures(xmlBytes []byte, arch interface{ requirePolicy(string) bool }) ([]string, error) {
 	var features SupportedHostFeature
-	if err := xml.Unmarshal(xmlBytes, &features); err != nil {
+	if err := xml.Unmarshal(stripXMLComments(xmlBytes), &features); err != nil {
 		return nil, fmt.Errorf("unmarshal supported_features: %w", err)
 	}
 

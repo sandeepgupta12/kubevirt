@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -32,6 +33,12 @@ import (
 
 	"kubevirt.io/kubevirt/pkg/virt-handler/node-labeller/util"
 )
+
+// xmlCommentRe strips XML comments before unmarshalling.  Some versions of
+// virsh/libvirt emit comments containing "--" (e.g. "<!-- a -- b -->") which
+// is illegal in XML 1.0 and causes Go's encoding/xml to return a parse error.
+// This is observed on ppc64le Power10 hosts.
+var xmlCommentRe = regexp.MustCompile(`(?s)<!--.*?-->`)
 
 const (
 	isSupported            string = "yes"
@@ -193,5 +200,5 @@ func (n *NodeLabeller) getStructureFromXMLFile(path string, structure interface{
 
 	n.logger.V(4).Infof("node-labeller - loading data from xml file: %#v", string(rawFile))
 
-	return xml.Unmarshal(rawFile, structure)
+	return xml.Unmarshal(xmlCommentRe.ReplaceAll(rawFile, nil), structure)
 }
