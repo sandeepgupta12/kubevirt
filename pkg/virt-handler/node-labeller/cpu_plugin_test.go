@@ -1,4 +1,4 @@
-//go:build amd64 || s390x
+//go:build amd64 || s390x || ppc64le
 
 /*
  * This file is part of the KubeVirt project
@@ -264,6 +264,64 @@ var _ = Describe("Node-labeller config", func() {
 			Entry("When Intel TDX is supported", true),
 			Entry("When Intel TDX is not supported", false),
 		)
+	})
+
+	It("Should return the cpu features on ppc64le even without policy='require' property", func() {
+		nlController.arch = newArchLabeller(ppc64le)
+		nlController.volumePath = "testdata/ppc64le"
+
+		err := nlController.loadHostSupportedFeatures()
+		Expect(err).ToNot(HaveOccurred())
+
+		cpuFeatures := nlController.getSupportedCpuFeatures()
+
+		// Real Power10 baseline has 16 features (confirmed on cluster)
+		Expect(cpuFeatures).To(HaveLen(16), "number of ppc64le features doesn't match")
+	})
+
+	It("Should return correct cpu models on ppc64le", func() {
+		nlController.arch = newArchLabeller(ppc64le)
+		nlController.volumePath = "testdata/ppc64le"
+		nlController.domCapabilitiesFileName = "virsh_domcapabilities.xml"
+
+		err := nlController.loadDomCapabilities()
+		Expect(err).ToNot(HaveOccurred())
+
+		usable := nlController.getSupportedCpuModels(nlController.clusterConfig.GetObsoleteCPUModels())
+		known := nlController.getKnownCpuModels(nlController.clusterConfig.GetObsoleteCPUModels())
+
+		Expect(usable).To(ConsistOf("POWER10", "POWER10-v2.0"), "usable ppc64le models should be POWER10 and POWER10-v2.0")
+		Expect(known).To(HaveLen(10), "all 10 known ppc64le models should be present")
+	})
+
+	It("Should default to IBM as CPU Vendor on ppc64le if none is given", func() {
+		nlController.arch = newArchLabeller(ppc64le)
+		nlController.volumePath = "testdata/ppc64le"
+		nlController.domCapabilitiesFileName = "virsh_domcapabilities.xml"
+
+		err := nlController.loadDomCapabilities()
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(nlController.cpuModelVendor).To(Equal("IBM"), "CPU Vendor should be IBM on ppc64le")
+	})
+
+	It("Should parse host-model POWER10 and required features on ppc64le", func() {
+		nlController.arch = newArchLabeller(ppc64le)
+		nlController.volumePath = "testdata/ppc64le"
+		nlController.domCapabilitiesFileName = "virsh_domcapabilities.xml"
+
+		err := nlController.loadDomCapabilities()
+		Expect(err).ToNot(HaveOccurred())
+
+		hostCPU := nlController.GetHostCpuModel()
+		Expect(hostCPU.Name).To(Equal("POWER10"))
+		Expect(hostCPU.requiredFeatures).To(SatisfyAll(
+			HaveKey("cfpc-sc"),
+			HaveKey("sbbc-sc"),
+			HaveKey("ibs-enh"),
+			HaveKey("mma"),
+			HaveKey("phnt"),
+		))
 	})
 
 	It("Make sure proper labels are removed on removeLabellerLabels()", func() {

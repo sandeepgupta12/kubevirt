@@ -1,32 +1,18 @@
-<!-- Output of: virsh hypervisor-cpu-baseline --migratable on ... on a Power10 host.
-     On ppc64le the <feature> elements do NOT carry a policy attribute
-     (analogous to s390x).  KubeVirt's archLabellerPPC64LE.requirePolicy()
-     therefore accepts both "require" and the empty string, matching the
-     s390x precedent set in s390x.go. -->
 <cpu>
   <model>POWER10</model>
-  <!-- Spectre/Meltdown mitigations always present on Power10 -->
   <feature name='cfpc-sc'/>
   <feature name='cfpc-vp'/>
   <feature name='sbbc-sc'/>
   <feature name='sbbc-p'/>
   <feature name='ibs-enh'/>
-  <!-- Matrix-Multiply Assist (MMA) — Power10 only -->
   <feature name='mma'/>
-  <!-- Prefixed instructions (Power10) -->
   <feature name='phnt'/>
-  <!-- Power ISA 3.1 features -->
   <feature name='power10-dfs'/>
-  <!-- Altivec / VMX -->
   <feature name='altivec'/>
   <feature name='vsx'/>
-  <!-- Transactional Memory -->
   <feature name='tm'/>
-  <!-- Radix MMU -->
   <feature name='radix-mmu'/>
-  <!-- Large pages -->
   <feature name='large-radix'/>
-  <!-- Security Features -->
   <feature name='pmu-bhrb'/>
   <feature name='pmu-sb'/>
 </cpu>
