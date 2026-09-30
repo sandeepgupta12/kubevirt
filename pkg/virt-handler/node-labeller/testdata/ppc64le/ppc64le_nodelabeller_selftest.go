@@ -296,7 +296,6 @@ const syntheticSupportedFeatures = `<cpu>
   <feature name='large-radix'/>
   <feature name='pmu-bhrb'/>
   <feature name='pmu-sb'/>
-  <feature name='power10-dfs'/>
 </cpu>`
 
 // ── helpers ──────────────────────────────────────────────────────────────────

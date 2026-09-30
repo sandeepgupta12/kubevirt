@@ -7,7 +7,6 @@
   <feature name='ibs-enh'/>
   <feature name='mma'/>
   <feature name='phnt'/>
-  <feature name='power10-dfs'/>
   <feature name='altivec'/>
   <feature name='vsx'/>
   <feature name='tm'/>

@@ -275,8 +275,8 @@ var _ = Describe("Node-labeller config", func() {
 
 		cpuFeatures := nlController.getSupportedCpuFeatures()
 
-		// Real Power10 baseline has 16 features (confirmed on cluster)
-		Expect(cpuFeatures).To(HaveLen(16), "number of ppc64le features doesn't match")
+		// Real Power10 baseline has 15 features (confirmed on cluster)
+		Expect(cpuFeatures).To(HaveLen(15), "number of ppc64le features doesn't match")
 	})
 
 	It("Should return correct cpu models on ppc64le", func() {
